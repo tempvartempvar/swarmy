@@ -1,0 +1,5 @@
+# Baseline: a single cheap worker model, no management at all.
+name: solo-worker
+levels:
+  - role: solo
+    model: gpt-oss-120b

@@ -1,0 +1,6 @@
+# Baseline: a single agent does everything itself.
+name: solo-opus
+levels:
+  - role: solo
+    model: opus
+    effort: medium

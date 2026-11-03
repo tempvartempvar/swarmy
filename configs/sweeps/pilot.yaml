@@ -1,0 +1,21 @@
+# Flatness pilot with a realistic model mix, at a fixed 4 workers:
+#   solo Sonnet  vs  Sonnet -> 4 workers  vs  Sonnet -> Haiku -> workers  vs  Sonnet -> Haiku -> Haiku -> workers
+# 16 runs x ~$0.31 cap = $5.
+name: pilot
+budget_usd: 5.0
+concurrency: 3
+orgs:
+  - generate:
+      name: mix
+      workers: 4
+      depths: [1, 2, 3]
+      include_solo: true
+      ladder:
+        - {role: lead, model: sonnet, effort: low}
+        - {role: manager, model: haiku}
+      worker: {model: gpt-oss-120b}
+tasks:
+  - {family: qa, params: {kind: chain, hops: 3}, seeds: [1]}
+  - {family: qa, params: {kind: aggregate, n: 6}, seeds: [1]}
+  - {family: code, params: {n: 6, coupling: 0.3}, seeds: [1]}
+  - {family: mixed, params: {products: 4, cities: 3}, seeds: [1]}

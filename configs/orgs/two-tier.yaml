@@ -1,0 +1,12 @@
+name: two-tier
+description: Sonnet lead -> 2 Haiku managers -> 3 workers each
+levels:
+  - role: lead
+    model: sonnet
+    effort: low
+    span: 2
+  - role: manager
+    model: haiku
+    span: 3
+  - role: worker
+    model: gpt-oss-120b

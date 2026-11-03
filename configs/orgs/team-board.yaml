@@ -1,0 +1,14 @@
+# Same shape as two-tier, but each team shares a notes board (lateral communication).
+name: two-tier-board
+description: two-tier with team notes boards
+levels:
+  - role: lead
+    model: sonnet
+    effort: low
+    span: 2
+  - role: manager
+    model: haiku
+    span: 3
+  - role: worker
+    model: gpt-oss-120b
+communication: team_board

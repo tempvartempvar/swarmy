@@ -1,0 +1,25 @@
+# Structure only: every agent runs the SAME model (Haiku), so differences come from the
+# shape of the org, not from model mix. Cheap enough for several seeds within $5.
+name: structure-control
+description: same model at every level; 4 workers; depth 0-3 plus a team-board variant
+budget_usd: 5.0
+concurrency: 3
+orgs:
+  - generate:
+      name: haiku
+      workers: 4
+      depths: [1, 2, 3]
+      include_solo: true
+      ladder: [{model: haiku}]
+      worker: {model: haiku}
+  - generate:
+      name: haiku-board
+      workers: 4
+      depths: [2]
+      ladder: [{model: haiku}]
+      worker: {model: haiku}
+      communication: team_board
+tasks:
+  - {family: qa, params: {kind: aggregate, n: 6}, seeds: [1, 2, 3]}
+  - {family: code, params: {n: 6, coupling: 0.3}, seeds: [1, 2, 3]}
+  - {family: mixed, params: {products: 4, cities: 3}, seeds: [1, 2, 3]}

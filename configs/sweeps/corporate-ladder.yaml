@@ -1,0 +1,21 @@
+# Your corporate model ladder, flattened step by step at a fixed 8 workers.
+# Depth 4 = full ladder (CEO -> C-suite -> directors -> managers -> workers); lower depths
+# remove tiers from the middle, keeping the CEO on top.
+# An Opus max-effort CEO is expensive, so $5 buys only one task across the four shapes.
+# For more data per dollar, set the CEO effort to high (or use --budget).
+name: corporate-ladder
+budget_usd: 5.0
+concurrency: 2
+orgs:
+  - generate:
+      name: corp
+      workers: 8
+      depths: [1, 2, 3, 4]
+      ladder:
+        - {role: ceo, model: opus, effort: max}
+        - {role: c-suite, model: opus, effort: medium}
+        - {role: director, model: sonnet, effort: medium}
+        - {role: manager, model: haiku}
+      worker: {model: gpt-oss-120b}
+tasks:
+  - {family: mixed, params: {products: 6, cities: 4}, seeds: [1]}

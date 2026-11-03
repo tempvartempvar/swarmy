@@ -1,0 +1,15 @@
+# First real run: checks your API keys and the whole pipeline for a few cents.
+name: smoke
+budget_usd: 0.50
+concurrency: 2
+orgs:
+  - path: configs/orgs/solo-haiku.yaml
+  - generate:
+      name: haiku-flat
+      workers: 3
+      depths: [1]
+      ladder: [{model: haiku, role: lead}]
+      worker: {model: gpt-oss-120b}
+tasks:
+  - {family: qa, params: {kind: chain, hops: 2}, seeds: [1]}
+  - {family: code, params: {n: 4, coupling: 0.0}, seeds: [1]}

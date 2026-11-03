@@ -1,0 +1,13 @@
+# Same structure, different models per level: a Cartesian matrix over the worker model
+# and the lead's effort. Each combination becomes its own org in the report.
+name: model-swap
+budget_usd: 5.0
+concurrency: 3
+orgs:
+  - path: configs/orgs/two-tier.yaml
+    matrix:
+      worker: [gpt-oss-120b, qwen-flash, haiku]
+      effort.lead: [low, medium]
+tasks:
+  - {family: code, params: {n: 6, coupling: 0.3}, seeds: [1]}
+  - {family: mixed, params: {products: 4, cities: 3}, seeds: [1]}
