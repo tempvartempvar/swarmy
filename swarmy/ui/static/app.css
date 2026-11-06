@@ -307,3 +307,5 @@ pre.code { background: var(--card); border: 1px solid var(--line); border-radius
 .md-body .form { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; align-items: end; margin: 8px 0 18px; }
 .md-body .form label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--text-2); }
 .ok { color: var(--ok); } .bad { color: var(--danger); }
+.mock-banner { border: 1px solid var(--warn); background: rgba(183, 121, 0, 0.1); border-radius: 8px; padding: 8px 12px; margin: 0 0 12px; font-size: 13px; }
+.mock-tag { background: var(--warn); color: #fff; border-radius: 4px; padding: 0 6px; font-size: 11px; font-weight: 700; }

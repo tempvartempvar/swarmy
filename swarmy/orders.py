@@ -28,7 +28,7 @@ def load_orders(tracer: Tracer, run_id: str, org_json: str | None = None) -> dic
             orders[oid] = {"id": oid, "parent": d.get("parent_order"), "from": e["node"],
                            "from_role": d.get("from_role"), "to": d.get("to"), "to_role": d.get("to_role"),
                            "level": d.get("to_level"), "text": d.get("text", d.get("preview", "")),
-                           "round": d.get("round", 1), "t": t, "report": None}
+                           "fields": d.get("fields"), "round": d.get("round", 1), "t": t, "report": None}
         elif e["kind"] == "report" and oid in orders:
             orders[oid]["report"] = {"status": d.get("status"), "text": d.get("text", d.get("preview", "")),
                                      "answer": d.get("answer"), "t": t}
@@ -43,8 +43,10 @@ def load_orders(tracer: Tracer, run_id: str, org_json: str | None = None) -> dic
         except Exception:
             pass
     meta = run[0] if run else {}
+    mock = tracer.query("SELECT mock FROM runs WHERE run_id=?", (run_id,))
     return {"run_id": run_id, "orders": sorted(orders.values(), key=lambda o: o["id"]), "goals": goals,
-            "task_id": meta.get("task_id"), "status": meta.get("status") or "running", "score": meta.get("score")}
+            "task_id": meta.get("task_id"), "status": meta.get("status") or "running", "score": meta.get("score"),
+            "mock": bool(mock and mock[0]["mock"])}
 
 
 def render(data: dict, full: bool = False, width: int = 110) -> str:
@@ -64,7 +66,8 @@ def render(data: dict, full: bool = False, width: int = 110) -> str:
         rework = f" (round {o['round']})" if o.get("round", 1) > 1 else ""
         head = f"{pad}[{o['id']}] {o['from']} → {o['to']}{rework}  [{status}]"
         lines.append(head)
-        lines.append(f"{pad}    order:  {clip(o['text'], width - len(pad))}")
+        objective = (o.get("fields") or {}).get("objective")
+        lines.append(f"{pad}    order:  {clip(objective or o['text'], width - len(pad))}")
         goal = data["goals"].get(o["to"])
         if goal:
             lines.append(f"{pad}    goal:   {clip(goal, width - len(pad))}")

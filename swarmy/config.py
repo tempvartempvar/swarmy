@@ -117,6 +117,20 @@ class CommunicationRules(BaseModel):
         return bool(any_rule and self.modes and self.max_messages)
 
 
+class OrderRules(BaseModel):
+    """How commanders must write orders.
+
+    structured: every order has an objective, distilled context, deliverables, constraints and a
+    done-when test (a simplified military orders format). free: a single free-text task.
+    no_forwarding rejects orders (and wiki edits) that paste long passages of the writer's own orders.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    format: Literal["structured", "free"] = "structured"
+    max_chars: int = Field(4000, ge=200)
+    no_forwarding: bool = True
+
+
 class Node:
     """Normalized position used by the engine and the UI."""
 
@@ -157,6 +171,7 @@ class OrgConfig(BaseModel):
     tree: TreeNode | None = None
     knowledge: Knowledge = Knowledge()
     communication: CommunicationRules = CommunicationRules()
+    orders: OrderRules = OrderRules()
     memory: Literal["persistent", "fresh"] = "persistent"
     disclose_models: bool = True  # tell commanders which model each subordinate runs
     manager_max_turns: int = 12

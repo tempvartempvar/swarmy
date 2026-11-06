@@ -831,6 +831,15 @@ function commPanel() {
   out.push(slider("skip_up", "Upward", (v) => `may contact up to ${v} rank${v > 1 ? "s" : ""} above their own commander`));
   out.push(slider("skip_down", "Downward", (v) => `officers may contact up to ${v} rank${v > 1 ? "s" : ""} below their direct subordinates`));
   out.push(check("Copy the officers who are skipped", c.cc_skipped !== false, (v) => upd("cc_skipped", v), "they get a cc in their inbox", "c-cc"));
+  out.push(h("h3", {}, "Orders"));
+  const o = S.config.orders = S.config.orders || {};
+  const updO = (key, val) => mutate(() => (o[key] = val));
+  out.push(field("Format", select_([{ value: "structured", label: "structured: objective, context, deliverables, constraints, done when" },
+    { value: "free", label: "free text" }], o.format || "structured", (v) => updO("format", v), "o-format"),
+    "structured orders force commanders to break work into well-constrained tasks"));
+  out.push(field("Max length", num(o.max_chars ?? 4000, (v) => updO("max_chars", v || 4000), "o-max", { min: 200, step: 100 }), "characters per order"));
+  out.push(check("Reject orders that relay the commander's own orders verbatim", o.no_forwarding !== false, (v) => updO("no_forwarding", v),
+    "also stops pasting orders into wikis", "o-fwd"));
   out.push(h("h3", {}, "How"));
   const modes = c.modes || ["ask", "message"];
   const setMode = (mode, on) => upd("modes", on ? [...new Set([...modes, mode])] : modes.filter((x) => x !== mode));
@@ -884,10 +893,12 @@ function runPanel() {
   out.push(h("div", { class: "row end" },
     running ? h("button", { onclick: () => openExplorer("orders") }, "Watch the chain of orders") : null,
     r && !running ? h("button", { onclick: () => { S.run = null; renderAll(); } }, "Clear") : null,
-    h("button", { id: "start-run", class: "primary", disabled: running || (!cfg.mock && !cfg.confirm) || (isMission && !S.customTask && !(cfg.mission || "").trim()), onclick: startRun }, running ? "Running…" : "Start run")));
+    h("button", { id: "start-run", class: "primary", disabled: running || (!cfg.mock && !cfg.confirm) || (isMission && !S.customTask && !(cfg.mission || "").trim()), onclick: startRun },
+      running ? "Running…" : cfg.mock ? "Start mock run" : "Start real run")));
+  if (cfg.mock) out.push(h("p", { class: "small muted" }, "Mock runs use scripted placeholder agents: they check the wiring for free, but every order, note and report they write is a placeholder."));
   if (r) {
     const secs = ((r.finished || Date.now() / 1000) - r.started).toFixed(1);
-    out.push(h("p", { class: "small" }, `${r.status} · ${secs}s · spent ${money(r.total_cost)} of $${Number(r.budget).toFixed(2)}${r.mock ? " (mock)" : ""} · ${r.task}`));
+    out.push(h("p", { class: "small" }, r.mock ? h("span", { class: "mock-tag" }, "MOCK") : null, ` ${r.status} · ${secs}s · spent ${money(r.total_cost)} of $${Number(r.budget).toFixed(2)} · ${r.task}`));
     if (r.summary) {
       const sm = r.summary;
       out.push(h("div", { class: "result" },
@@ -916,11 +927,12 @@ function fmtEvent(ev) {
   const pv = (t) => (t ? h("span", { class: "pv" }, trunc(t, 220)) : null);
   switch (ev.kind) {
     case "mission": return h("div", { class: "ev assign" }, `Mission → ${d.to}`, pv(d.title));
-    case "assign": return h("div", { class: "ev assign" }, `${who} → ${d.to}: order #${d.order_id} (${d.chars} chars${d.round > 1 ? ", rework" : ""})`, pv(d.preview));
+    case "assign": return h("div", { class: "ev assign" }, `${who} → ${d.to}: order #${d.order_id}${d.round > 1 ? " (rework)" : ""}`,
+      pv(d.fields && d.fields.objective ? d.fields.objective : d.preview));
     case "report": return h("div", { class: "ev report" }, `${who} → ${d.to === "client" ? "you" : d.to}: report [${d.status}]`, pv(d.preview));
     case "ask": return h("div", { class: "ev ask" }, `${who} asked ${d.to} (${KIND_NAME[d.kind] || d.kind})${d.cc && d.cc.length ? `, cc ${d.cc.join(", ")}` : ""}`, pv(`Q: ${d.preview}\nA: ${d.answer_preview}`));
     case "message": return h("div", { class: "ev message" }, `${who} → ${d.to}: message (${KIND_NAME[d.kind] || d.kind})${d.cc && d.cc.length ? `, cc ${d.cc.join(", ")}` : ""}`, pv(d.preview));
-    case "wiki_write": return h("div", { class: "ev wiki" }, `${who} wrote ${d.wiki} / ${d.page}`, pv(d.preview));
+    case "wiki_write": return h("div", { class: "ev wiki" }, `${who} edited ${d.wiki} / ${d.page}${d.summary ? `: “${d.summary}”` : ""}`, pv(d.preview));
     case "wiki_read": return h("div", { class: "ev wiki" }, `${who} read ${d.wiki}${d.page ? " / " + d.page : d.query ? ` (search "${d.query}")` : ""}`);
     case "inbox": return h("div", { class: "ev" }, `${who} read ${d.count} inbox message${d.count > 1 ? "s" : ""}`);
     case "progress": return h("div", { class: "ev report" }, `workspace score ${Number(d.score).toFixed(2)} after ${who}'s delegation round ${d.round}`);
@@ -1052,7 +1064,7 @@ async function openExplorer(tab, runId) {
   else if (!S.ex.list.some((r) => r.run_id === S.ex.run)) S.ex.run = S.ex.list[0] ? S.ex.list[0].run_id : null;
   const sel = $("#ex-source");
   sel.replaceChildren(...(S.ex.list.length ? S.ex.list.map((r) => h("option", { value: r.run_id },
-    `${r.status === "running" ? "● live · " : ""}${r.org || "?"} · ${r.task || "?"} · ${r.run_id.replace("run_", "")}`))
+    `${r.status === "running" ? "● live · " : ""}${r.mock ? "MOCK · " : ""}${r.org || "?"} · ${r.task || "?"} · ${r.run_id.replace("run_", "")}`))
     : [h("option", { value: "" }, "No runs yet: start one in the Manoeuvres tab")]));
   sel.value = S.ex.run || "";
   $("#explorer").showModal();
@@ -1091,6 +1103,16 @@ function renderExplorer() {
   if (S.ex.tab === "orders") renderOrders();
   else if (S.ex.tab === "files") renderFiles();
   else renderWikiBrowser();
+  if (S.ex.tab !== "orders" && exRunInfo().mock) $("#ex-main").prepend(mockBanner(true));
+}
+const ORDER_SECTIONS = [["objective", "Objective"], ["context", "Context"], ["deliverables", "Deliverables"],
+  ["constraints", "Constraints"], ["done_when", "Done when"]];
+const orderHeadline = (o) => (o.id === 0 && o.title) ? o.title
+  : (o.fields && o.fields.objective) || (o.text || "").replace(/^\[part[^\]]*\]\s*/, "").replace(/\s+/g, " ");
+function mockBanner(isMock) {
+  return isMock ? h("div", { class: "mock-banner" }, h("strong", {}, "Mock run. "),
+    "These orders, notes and reports are placeholders written by scripted agents, not by real models. Untick ",
+    h("em", {}, "Mock models"), " in the Manoeuvres tab to run real models.") : null;
 }
 function orderChildren(data) {
   const kids = {};
@@ -1107,17 +1129,18 @@ function renderOrders() {
       onclick: () => { S.ex.sel = o.id; renderOrders(); } },
       h("div", { class: "t" }, h("span", { class: "ord-st st-" + (o.report ? o.report.status : "open") }, STATUS_ICON[st] || "•"), " ",
         o.id === 0 ? "Mission → " : "", o.to, " ", rankBadge(o.to_role || "?"), o.round > 1 ? h("span", { class: "muted small" }, ` round ${o.round}`) : null),
-      h("div", { class: "m" }, trunc((o.id === 0 && o.title) ? o.title : (o.text || "").replace(/^\[part[^\]]*\]\s*/, "").replace(/\s+/g, " "), 90))));
+      h("div", { class: "m" }, trunc(orderHeadline(o), 90))));
     (kids[o.id] || []).forEach((c) => walk(c, depth + 1));
   };
   (kids.root || []).forEach((o) => walk(o, 0));
-  nav.replaceChildren(h("div", { class: "muted small", style: "margin-bottom:8px" }, `${data.orders.length} orders · ${data.status}`), ...items);
+  nav.replaceChildren(h("div", { class: "muted small", style: "margin-bottom:8px" }, `${data.orders.length} orders · ${data.status}${data.mock ? " · MOCK" : ""}`), ...items);
 
   const o = data.orders.find((x) => x.id === S.ex.sel) || data.orders[0];
   const parent = data.orders.find((x) => x.id === o.parent);
   const children = kids[o.id] || [];
   const goal = data.goals[o.to];
   const out = [
+    mockBanner(data.mock),
     h("h2", { style: "margin:0" }, o.id === 0 ? "The mission" : `Order #${o.id}`),
     h("div", { class: "wb-meta" },
       h("div", {}, h("strong", {}, o.from === "client" ? "You" : o.from), " ", o.from === "client" ? null : rankBadge(o.from_role || "?"),
@@ -1126,13 +1149,16 @@ function renderOrders() {
         parent.id === 0 ? "the mission" : `order #${parent.id} (${parent.from} → ${parent.to})`)) : null),
   ];
   if (goal) out.push(h("div", { class: "goal-box" }, h("strong", {}, `${o.to}'s standing goal: `), goal));
-  out.push(h("h3", {}, o.id === 0 ? "What you asked for" : "The order"), md(o.text));
+  if (o.fields && o.fields.objective) {
+    for (const [k, label] of ORDER_SECTIONS) if (o.fields[k]) out.push(h("h3", {}, label), md(o.fields[k]));
+  } else out.push(h("h3", {}, o.id === 0 ? "What you asked for" : "The order"), md(o.text));
   if (children.length) {
     out.push(h("h3", {}, `How ${o.to} split it up (${children.length} order${children.length > 1 ? "s" : ""})`));
     out.push(h("div", { class: "split" }, children.map((c) => h("div", { class: "split-item", onclick: () => { S.ex.sel = c.id; renderOrders(); } },
       h("div", {}, h("strong", {}, c.to), " ", rankBadge(c.to_role || "?"), c.round > 1 ? h("span", { class: "muted small" }, ` round ${c.round}`) : null,
         h("span", { class: "muted small" }, `  ${c.report ? c.report.status : "working…"}`)),
-      h("div", { class: "small" }, trunc((c.text || "").replace(/^\[part[^\]]*\]\s*/, "").replace(/\s+/g, " "), 220))))));
+      h("div", { class: "small" }, trunc(orderHeadline(c), 220)),
+      c.fields && c.fields.done_when ? h("div", { class: "small muted" }, "Done when: " + trunc(c.fields.done_when, 140)) : null))));
   } else if (!o.report) out.push(h("p", { class: "muted small" }, "Still working on it."));
   if (o.report) {
     out.push(h("h3", {}, o.id === 0 ? `Final report to you (${o.report.status})` : `Report back to ${o.from} (${o.report.status}, at ${o.report.t.toFixed(1)}s)`));
@@ -1175,7 +1201,8 @@ function renderWikiBrowser() {
         return h("button", { class: "wb-page" + (inst.id === wb.inst && p.title === wb.page ? " sel" : ""),
           onclick: () => { wb.inst = inst.id; wb.page = p.title; wb.rev = null; renderWikiBrowser(); } },
           h("div", { class: "t" }, p.title),
-          h("div", { class: "m" }, `v${cur.version} · ${cur.author} `, rankBadge(cur.role), ` · ${editors} editor${editors > 1 ? "s" : ""}`));
+          h("div", { class: "m" }, `v${cur.version} · ${cur.author} `, rankBadge(cur.role), ` · ${editors} editor${editors > 1 ? "s" : ""}`),
+          cur.summary ? h("div", { class: "m" }, `“${trunc(cur.summary, 70)}”`) : null);
       })));
   }
   if (!navItems.length) navItems.push(h("p", { class: "muted" }, wb.role ? "No pages edited by that rank." : "No wiki pages in this run."));
@@ -1192,7 +1219,7 @@ function renderWikiBrowser() {
     h("h2", { style: "margin:0" }, page.title),
     h("div", { class: "wb-meta" },
       h("div", {}, h("code", {}, inst.id), ` · ${inst.label} · ${revs.length} revision${revs.length > 1 ? "s" : ""}`),
-      h("div", {}, `Last edited at ${cur.t.toFixed(1)}s by `, author(cur)),
+      h("div", {}, `Last edited at ${cur.t.toFixed(1)}s by `, author(cur), cur.summary ? h("span", {}, ` · “${cur.summary}”`) : null),
       h("div", {}, "Contributors: ", Object.values(people).map(({ r, n }, i) => [i ? ", " : "", h("strong", {}, r.author), " ", rankBadge(r.role), h("span", { class: "muted small" }, ` ×${n}`)]))),
     h("div", { class: "wb-tabs" },
       h("button", { class: wb.view === "page" ? "on" : "", onclick: () => { wb.view = "page"; renderWikiBrowser(); } }, "Page"),
@@ -1202,12 +1229,12 @@ function renderWikiBrowser() {
     if (shown !== cur) out.push(h("p", { class: "small" }, `Showing v${shown.version} by `, author(shown), " · ", h("span", { class: "linklike", onclick: () => { wb.rev = null; renderWikiBrowser(); } }, "back to latest")));
     out.push(md(shown.content));
   } else {
-    const table = h("table", { class: "hist" }, h("tr", {}, ["v", "when", "who", "change", ""].map((c) => h("th", {}, c))));
+    const table = h("table", { class: "hist" }, h("tr", {}, ["v", "when", "who", "edit summary", "change", ""].map((c) => h("th", {}, c))));
     [...revs].reverse().forEach((r) => {
       const dim = wb.role && r.role !== wb.role;
       table.append(h("tr", { class: (shown.version === r.version && wb.rev ? "sel" : ""), style: dim ? "opacity:.45" : "",
         onclick: () => { wb.rev = r.version; renderWikiBrowser(); } },
-        h("td", {}, `v${r.version}`), h("td", {}, `${r.t.toFixed(1)}s`), h("td", {}, author(r)),
+        h("td", {}, `v${r.version}`), h("td", {}, `${r.t.toFixed(1)}s`), h("td", {}, author(r)), h("td", {}, r.summary || h("span", { class: "muted" }, "(none)")),
         h("td", {}, `${r.mode} `, h("span", { class: r.chars_delta >= 0 ? "pill-ok" : "pill-bad" }, `${r.chars_delta >= 0 ? "+" : ""}${r.chars_delta}`), " chars"),
         h("td", {}, h("span", { class: "linklike", onclick: (e) => { e.stopPropagation(); wb.rev = r.version; wb.view = "page"; renderWikiBrowser(); } }, "view"))));
     });
@@ -1215,7 +1242,7 @@ function renderWikiBrowser() {
     const sel = wb.rev ? revs.find((r) => r.version === wb.rev) : cur;
     const prev = revs.find((r) => r.version === sel.version - 1);
     out.push(h("h3", {}, prev ? `What v${sel.version} changed (vs v${prev.version})` : `v${sel.version} created the page`));
-    out.push(h("p", { class: "small" }, "By ", author(sel), ` at ${sel.t.toFixed(1)}s`));
+    out.push(h("p", { class: "small" }, "By ", author(sel), ` at ${sel.t.toFixed(1)}s`, sel.summary ? ` · “${sel.summary}”` : ""));
     const diff = h("div", { class: "diff" });
     const lines = diffLines(prev ? prev.content : "", sel.content);
     const line = ([k, l]) => h("div", { class: k }, (k === "add" ? "+ " : k === "del" ? "− " : "  ") + l);

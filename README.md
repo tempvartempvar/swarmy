@@ -61,7 +61,8 @@ swarmy ui                  # http://127.0.0.1:8765
 ```
 
 Check everything offline first. The scripted mock provider runs the whole pipeline without
-making any API calls:
+making any API calls. Mock agents don't think: every order, note and report they write is a
+labelled `[mock]` placeholder, and mock runs are marked MOCK throughout the designer.
 
 ```bash
 swarmy run --org configs/orgs/field-army.yaml --task mixed --mock
@@ -262,16 +263,49 @@ knowledge:
 ```
 
 Agents get `wiki_read`, `wiki_search` and (where permitted) `wiki_write` for the wikis they can
-reach. Their prompt lists each wiki and its scope, and every page they read shows who last edited it
-and every contributor, with their ranks.
+reach. Wikis are meant to be a curated knowledge base, not a log:
+- Agents are told to keep one short, sourced page per topic (facts, interfaces, plan, test results).
+- `wiki_write` replaces the page with an improved version unless `append` is set (for log pages).
+- Every edit needs an **edit summary**, and edits that change nothing are skipped.
+- Pasting orders into a page is rejected.
 
-Every edit is kept as a revision recording the editor's name, rank, level and model, the kind of edit
-(create, replace or append) and when in the run it happened. To read them:
+Every page an agent reads shows who last edited it, the last edit summary, and all contributors with
+their ranks.
+
+Every edit is kept as a revision recording the editor's name, rank, level and model, the edit
+summary, the kind of edit (create, replace or append) and when in the run it happened. To read them:
 
 - the **run explorer** in `swarmy ui` (live or past runs, with history and diffs);
 - `swarmy wiki [RUN] [--wiki ID] [--page TITLE]` on the command line;
 - the run directory: `runs/<run_id>/wikis/wikis.json` (everything) plus one Markdown file per page,
   with a contributor list and a revision table.
+
+### Orders
+
+Commanders give orders with `delegate`. By default orders are **structured**, a simplified military
+orders format, so every order is a well-constrained task rather than a forwarded brief:
+
+| field | what it holds |
+|---|---|
+| `objective` (required) | the single outcome this subordinate must achieve |
+| `context` | only the facts it needs, distilled, in the commander's own words (or a pointer to a wiki page) |
+| `deliverables` (required) | exactly what to hand back: files, facts, decisions, and in what form |
+| `constraints` | interfaces, limits, rules, what not to do |
+| `done_when` (required) | the test that shows the task is finished |
+
+Orders that repeat long passages of the commander's own orders verbatim are rejected, with a message
+telling it to decide the plan and pass on only what each subordinate needs. The same check stops
+agents pasting orders into wikis. All of this is configurable, so it can be an experimental variable:
+
+```yaml
+orders:
+  format: structured     # structured | free (a single free-text task)
+  max_chars: 4000        # per order
+  no_forwarding: true    # reject verbatim relaying of one's own orders
+```
+
+The run explorer's chain of orders shows each order's objective in the outline and its sections in
+full. The **Signals** tab in the designer has the same settings.
 
 ### Communication rules
 

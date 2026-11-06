@@ -76,10 +76,18 @@ def system_prompt(agent: "Agent", ctx: "RunContext") -> str:
             lines.append("- You have hands-on tools, but your main job is to direct your reports.")
         else:
             lines.append("- You have no hands-on tools. You get work done by calling `delegate`.")
+        if org.orders.format == "structured":
+            lines += [
+                "- You are a commander, not a relay. Turn your orders into smaller, well-constrained tasks: each "
+                "order has one objective, only the context that subordinate needs (distilled, in your own words), "
+                "concrete deliverables, constraints, and a done-when test. Don't forward your own orders: decide "
+                "the plan and give each subordinate its part."
+                + (" Orders that repeat your orders verbatim are rejected." if org.orders.no_forwarding else ""),
+            ]
         lines += [
-            "- Your reports only see what you send them (and any wiki pages they can read). Make each assignment "
-            "self-contained: include every detail they need (exact names, specifications, formats, file paths, what "
-            "to report back).",
+            "- Your subordinates only see what you send them (and any wiki pages they can read). Include the exact "
+            "names, numbers, interfaces and file paths they need, and nothing they don't. Put facts several people "
+            "need on a wiki page once and point to it.",
             "- Split the work to fit your forces: give larger or harder parts to subordinates with bigger commands "
             "or stronger models, and let them proceed in parallel without overlapping. Put several assignments in "
             "one `delegate` call; they run at the same time and you get all reports back together.",
@@ -111,8 +119,11 @@ def system_prompt(agent: "Agent", ctx: "RunContext") -> str:
         for inst, can_write in wikis:
             extra = f" {inst.spec.description}" if inst.spec.description else ""
             lines.append(f"- `{inst.id}` ({inst.label()}; {'read/write' if can_write else 'read only'}).{extra}")
-        lines.append("- Use wiki_read / wiki_search to find what others have recorded, and wiki_write to record plans, "
-                     "decisions, interfaces and findings that others will need. Check the wiki before redoing work.")
+        lines.append("- Treat the wikis as the team's curated knowledge base, not a log: one page per topic (for example "
+                     "'Facts', 'Interfaces', 'Plan', 'Test results'), short and factual, with sources (document ids, "
+                     "file names). Read a page before writing, then replace it with an improved version and give an "
+                     "edit summary. Don't create near-duplicate pages and never paste orders or whole documents.")
+        lines.append("- Use wiki_read / wiki_search before redoing work someone may already have done.")
 
     contacts = ctx.contacts_of(agent)
     if contacts:
@@ -150,7 +161,7 @@ def root_message(task) -> str:
 
 
 def assignment_message(parent: "Agent", text: str) -> str:
-    return f"Assignment from {parent.name} ({parent.spec.role}):\n\n{text}"
+    return f"Orders from {parent.name} ({parent.spec.role}):\n\n{text}"
 
 
 def question_message(asker: "Agent", kind: str, question: str) -> str:

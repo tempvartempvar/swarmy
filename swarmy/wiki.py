@@ -29,6 +29,7 @@ class Revision:
     content: str
     t: float  # seconds since the run started
     chars_delta: int = 0
+    summary: str = ""  # edit summary, like a wiki's "what changed and why"
 
 
 @dataclass
@@ -72,7 +73,7 @@ class WikiStore:
         return next((p for t, p in pages.items() if t.lower() == low), None)
 
     def write(self, wiki_id: str, title: str, content: str, *, author: str, role: str, level: int | None,
-              model: str | None, append: bool = False) -> Revision:
+              model: str | None, append: bool = False, summary: str = "") -> Revision:
         with self._lock:
             page = self.find(wiki_id, title)
             if page is None:
@@ -85,7 +86,8 @@ class WikiStore:
                 mode, new = "replace", content
             prev = len(page.content) if page.revisions else 0
             rev = Revision(version=len(page.revisions) + 1, author=author, role=role, level=level, model=model,
-                           mode=mode, content=new, t=round(time.time() - self.t0, 2), chars_delta=len(new) - prev)
+                           mode=mode, content=new, t=round(time.time() - self.t0, 2), chars_delta=len(new) - prev,
+                           summary=summary.strip()[:300])
             page.revisions.append(rev)
             return rev
 
@@ -156,13 +158,14 @@ def render_markdown(inst: dict, page: dict) -> str:
         "",
         "## Revision history",
         "",
-        "| v | when | author | rank | level | model | change |",
-        "|---|---|---|---|---|---|---|",
+        "| v | when | author | rank | level | model | change | summary |",
+        "|---|---|---|---|---|---|---|---|",
     ]
     for r in revs:
+        summary = (r.get("summary") or "").replace("|", "/")
         lines.append(f"| {r['version']} | {r['t']:.1f}s | {r['author']} | {r['role']} | "
                      f"{'' if r['level'] is None else r['level']} | {r['model'] or ''} | "
-                     f"{r['mode']} ({r['chars_delta']:+d} chars) |")
+                     f"{r['mode']} ({r['chars_delta']:+d} chars) | {summary} |")
     return "\n".join(lines) + "\n"
 
 

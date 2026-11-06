@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -25,8 +26,40 @@ MAX_WIKI_PAGE = 30_000
 ANSWER_TOKENS = 4000
 
 
+ORDER_FIELDS = [  # (key, heading, required, max chars, description)
+    ("objective", "OBJECTIVE", True, 500, "one or two sentences: the single outcome this subordinate must achieve"),
+    ("context", "CONTEXT", False, 2000, "only the facts and background they need, distilled in your own words "
+                                         "(point to wiki pages or files instead of repeating them)"),
+    ("deliverables", "DELIVERABLES", True, 800, "exactly what to hand back: files, facts, decisions, and in what form"),
+    ("constraints", "CONSTRAINTS", False, 1200, "interfaces, limits, rules, what not to do"),
+    ("done_when", "DONE WHEN", True, 600, "the test that shows the task is finished"),
+]
+FORWARD_LIMIT = 300  # verbatim characters of your own orders an order or wiki edit may repeat
+
+
 class ToolError(Exception):
     pass
+
+
+def forwarded_chars(new: str, source: str, min_len: int = 60) -> int:
+    """Characters of `new` that are long verbatim fragments (sentences/lines) of `source`."""
+    if not source:
+        return 0
+    total = 0
+    for frag in re.split(r"(?<=[.!?:;])\s+|\n+", new):
+        f = frag.strip()
+        if len(f) >= min_len and f in source:
+            total += len(f)
+    return total
+
+
+def render_order(fields: dict) -> str:
+    parts = []
+    for key, heading, _, _, _ in ORDER_FIELDS:
+        val = (fields.get(key) or "").strip()
+        if val:
+            parts.append(f"{heading}\n{val}")
+    return "\n\n".join(parts)
 
 
 def _obj(props: dict, required: list[str]) -> dict:
@@ -41,17 +74,24 @@ def tool_specs(agent: "Agent", ctx: "RunContext") -> list[ToolSpec]:
 
     if agent.children:
         names = [c.name for c in agent.children]
+        rules = org.orders
+        to_field = {"type": "string", "enum": names, "description": "name of the direct subordinate"}
+        if rules.format == "structured":
+            item = _obj({"to": to_field, **{k: {"type": "string", "description": d} for k, _, _, _, d in ORDER_FIELDS}},
+                        ["to"] + [k for k, _, req, _, _ in ORDER_FIELDS if req])
+            how = ("Each order is a well-constrained task: one objective, only the context that subordinate needs "
+                   "(distilled, in your own words), concrete deliverables, constraints and a done-when test.")
+        else:
+            item = _obj({"to": to_field, "task": {"type": "string", "description": "complete, self-contained instructions"}},
+                        ["to", "task"])
+            how = "Each order must be self-contained."
+        forward = " Orders that repeat your own orders verbatim are rejected." if rules.no_forwarding else ""
         specs.append(ToolSpec(
             "delegate",
-            "Assign work to one or more of your direct reports. All assignments in one call run in parallel; "
-            "the tool returns when every assignee has submitted their report. Each assignment must be "
-            "self-contained: the assignee sees only the text you give them.",
-            _obj({"assignments": {
-                "type": "array",
-                "items": _obj({"to": {"type": "string", "enum": names, "description": "name of the direct report"},
-                               "task": {"type": "string", "description": "complete, self-contained instructions"}},
-                              ["to", "task"]),
-            }}, ["assignments"]),
+            "Give orders to one or more of your direct subordinates. All orders in one call run in parallel; the "
+            f"tool returns when every subordinate has reported back. The subordinate sees only what you write. {how}"
+            f" Keep each order under {rules.max_chars} characters.{forward}",
+            _obj({"assignments": {"type": "array", "items": item}}, ["assignments"]),
         ))
     if task.has_workspace and (hands_on or review):
         specs.append(ToolSpec("list_files", "List files in the shared workspace.", _obj({}, [])))
@@ -84,11 +124,18 @@ def tool_specs(agent: "Agent", ctx: "RunContext") -> list[ToolSpec]:
                               _obj({"wiki": {"type": "string", "enum": readable}, "query": {"type": "string"}},
                                    ["wiki", "query"])))
         if writable:
-            specs.append(ToolSpec("wiki_write", "Create or update a page on a shared wiki. Set append=true to add to "
-                                  "the end of an existing page instead of replacing it.",
-                                  _obj({"wiki": {"type": "string", "enum": writable}, "page": {"type": "string"},
-                                        "content": {"type": "string"}, "append": {"type": "boolean"}},
-                                       ["wiki", "page", "content"])))
+            specs.append(ToolSpec(
+                "wiki_write",
+                "Create or improve a topic page on a shared wiki. Wikis are a curated knowledge base: one page per "
+                "topic, distilled facts and decisions with their sources, kept current. Read the page first, then "
+                "write the whole improved page (it replaces the old version). Use append=true only for log-style "
+                "pages. Never paste orders or whole documents.",
+                _obj({"wiki": {"type": "string", "enum": writable},
+                      "page": {"type": "string", "description": "topic title, e.g. 'Zone facts' or 'Interfaces'"},
+                      "content": {"type": "string", "description": "the full page (Markdown)"},
+                      "summary": {"type": "string", "description": "edit summary: what changed and why"},
+                      "append": {"type": "boolean"}},
+                     ["wiki", "page", "content", "summary"])))
 
     contacts = ctx.contacts_of(agent)
     if contacts:
@@ -158,24 +205,59 @@ class Toolbox:
             return ToolResult(call.id, f"Error: {e}", True)
 
     # ---- delegation ----
+    def _order_from(self, agent: "Agent", a: dict) -> tuple[str, dict]:
+        """Validate one assignment and return (rendered order text, structured fields)."""
+        rules = self.ctx.org.orders
+        if rules.format == "structured":
+            fields = {k: str(a.get(k) or "").strip() for k, _, _, _, _ in ORDER_FIELDS}
+            if not any(fields.values()) and a.get("task"):
+                raise ToolError("write a structured order (objective, context, deliverables, constraints, done_when), "
+                                "not a single task string")
+            missing = [k for k, _, req, _, _ in ORDER_FIELDS if req and not fields[k]]
+            if missing:
+                raise ToolError(f"missing {', '.join(missing)}")
+            for k, _, _, limit, _ in ORDER_FIELDS:
+                if len(fields[k]) > limit:
+                    raise ToolError(f"{k} is {len(fields[k])} characters; keep it under {limit}. Distill it.")
+            text = render_order(fields)
+        else:
+            text, fields = str(a.get("task") or "").strip(), {}
+            if not text:
+                raise ToolError("empty task")
+        if len(text) > rules.max_chars:
+            raise ToolError(f"order is {len(text)} characters; the limit is {rules.max_chars}. Give only what this "
+                            "subordinate needs; put shared facts on a wiki page and point to it.")
+        if rules.no_forwarding:
+            copied = forwarded_chars(text, agent.current_order_text)
+            if copied > FORWARD_LIMIT or (copied > 120 and copied > 0.5 * len(text)):
+                raise ToolError(f"this order repeats {copied} characters of your own orders verbatim. Don't relay: "
+                                "decide what this subordinate must do and give it only the facts it needs, in your "
+                                "own words.")
+        return text, fields
+
     async def _t_delegate(self, agent: "Agent", args: dict) -> str:
         ctx = self.ctx
         by_name = {c.name: c for c in agent.children}
         jobs: dict[str, str] = {}
+        job_fields: dict[str, dict] = {}
         problems = []
         for a in args.get("assignments") or []:
             if not isinstance(a, dict):
-                problems.append("each assignment must be an object with 'to' and 'task'")
+                problems.append("each assignment must be an object")
                 continue
-            to, text = a.get("to"), (a.get("task") or "").strip()
+            to = a.get("to")
             if to not in by_name:
-                problems.append(f"'{to}' is not one of your direct reports ({', '.join(by_name)})")
-            elif not text:
-                problems.append(f"empty task for {to}")
-            else:
-                jobs[to] = f"{jobs[to]}\n\n{text}" if to in jobs else text
+                problems.append(f"'{to}' is not one of your direct subordinates ({', '.join(by_name)})")
+                continue
+            if to in jobs:
+                problems.append(f"only one order per subordinate per call ({to} got two; the first was kept)")
+                continue
+            try:
+                jobs[to], job_fields[to] = self._order_from(agent, a)
+            except ToolError as e:
+                problems.append(f"order to {to} rejected: {e}")
         if not jobs:
-            raise ToolError("no valid assignments. " + "; ".join(problems))
+            raise ToolError("no orders were sent. " + "; ".join(problems))
 
         ctx.delegate_rounds[agent.name] += 1
         terms = ctx.task.key_terms
@@ -190,6 +272,7 @@ class Toolbox:
                 "round": ctx.assign_counts[to], "terms": [t for t in terms if t.lower() in low],
                 "order_id": order_ids[to], "parent_order": agent.current_order,
                 "from_role": agent.spec.role, "to_role": child.spec.role, "text": text, "preview": text[:240],
+                "fields": job_fields.get(to) or None,
             })
 
         ctx.live(agent, "waiting", {"on": list(jobs)})
@@ -199,7 +282,7 @@ class Toolbox:
                        for to, text in jobs.items()}
         ctx.live(agent, "working", {})
 
-        parts = [f"Note: {p}" for p in problems]
+        parts = [f"Note: {p}. Fix and resend that order if it is still needed." for p in problems]
         for to, fut in futures.items():
             rep = fut.result()
             ctx.event(by_name[to], "report", {"to": agent.name, "chars": len(rep["report"]), "status": rep["status"],
@@ -306,7 +389,8 @@ class Toolbox:
             if not pages:
                 return f"{inst.id} has no pages yet."
             return f"Pages in {inst.id}:\n" + "\n".join(
-                f"- {p.title} ({p.byline()}; {len(p.content)} chars)" for p in pages)
+                f"- {p.title} ({p.byline()}; {len(p.content)} chars)"
+                + (f" - last change: {p.current.summary}" if p.current.summary else "") for p in pages)
         page = store.find(inst.id, title)
         if page is None:
             raise ToolError(f"no page {title!r} in {inst.id}; call wiki_read without a page to list pages")
@@ -328,13 +412,22 @@ class Toolbox:
         existing = store.find(inst.id, args["page"])
         new_len = len(args["content"]) + (len(existing.content) + 2 if existing and args.get("append") else 0)
         if new_len > MAX_WIKI_PAGE:
-            raise ToolError(f"page too long ({new_len} chars; limit {MAX_WIKI_PAGE})")
+            raise ToolError(f"page too long ({new_len} chars; limit {MAX_WIKI_PAGE}). Distill it or split the topic.")
+        if self.ctx.org.orders.no_forwarding:
+            copied = forwarded_chars(args["content"], agent.current_order_text)
+            if copied > FORWARD_LIMIT:
+                raise ToolError(f"this edit pastes {copied} characters of your orders. Wiki pages hold distilled "
+                                "knowledge (facts, decisions, interfaces, results), not orders.")
+        if existing and not args.get("append") and existing.content.strip() == args["content"].strip():
+            return f"No change: {inst.id} / {existing.title} already has this content."
         rev = store.write(inst.id, args["page"], args["content"], author=agent.name, role=agent.spec.role,
-                          level=agent.level, model=agent.model.alias, append=bool(args.get("append")))
+                          level=agent.level, model=agent.model.alias, append=bool(args.get("append")),
+                          summary=str(args.get("summary") or ""))
         title = store.find(inst.id, args["page"]).title
         self.ctx.event(agent, "wiki_write", {"wiki": inst.id, "page": title, "version": rev.version, "mode": rev.mode,
                                              "role": agent.spec.role, "chars": len(rev.content),
-                                             "delta": rev.chars_delta, "preview": args["content"][:200]})
+                                             "delta": rev.chars_delta, "summary": rev.summary,
+                                             "preview": args["content"][:200]})
         return f"Saved {inst.id} / {title} (v{rev.version})."
 
     # ---- workspace ----

@@ -187,7 +187,7 @@ async def run_one(
                       **{k: round(v, 6) if isinstance(v, float) else v for k, v in ctx.per_node[a.name].items()}}
              for a in root.walk()}
     summary = {**{k: row[k] for k in ("run_id", "org_name", "task_id", "status", "score", "passed", "answer",
-                                     "cost_usd", "wall_s", "n_calls", "error")},
+                                     "cost_usd", "wall_s", "n_calls", "error")}, "mock": registry.mock,
                "grade": grade.details, "nodes": nodes, "run_dir": str(run_dir)}
     (run_dir / "result.json").write_text(json.dumps(summary, indent=2, default=str))
     if fatal is not None:

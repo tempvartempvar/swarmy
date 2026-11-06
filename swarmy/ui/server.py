@@ -290,7 +290,8 @@ class UIState:
             if rec["status"] == "running":
                 seen.add(rid)
                 out.append({"run_id": rid, "org": rec["org"], "task": rec["task"], "status": "running",
-                            "score": None, "family": rec.get("family"), "mtime": rec["started"], "live": True})
+                            "score": None, "family": rec.get("family"), "mtime": rec["started"], "live": True,
+                            "mock": rec["mock"]})
         runs_dir = self.results_dir / "runs"
         if runs_dir.exists():
             for f in runs_dir.glob("run_*/result.json"):
@@ -304,6 +305,7 @@ class UIState:
                 out.append({"run_id": rid, "org": meta.get("org_name"), "task": meta.get("task_id"),
                             "status": meta.get("status"), "score": meta.get("score"),
                             "family": (meta.get("task_id") or "").split("/")[0], "mtime": f.stat().st_mtime,
+                            "mock": meta.get("mock"),
                             "has_wikis": (f.parent / "wikis" / "wikis.json").exists()})
         out.sort(key=lambda r: -r["mtime"])
         return out[:100]
@@ -317,7 +319,10 @@ class UIState:
         org_json = self.runs[key]["org_json"] if key else None
         tracer = Tracer(self.results_dir / "swarmy.db")
         try:
-            return load_orders(tracer, run_id, org_json)
+            data = load_orders(tracer, run_id, org_json)
+            if key:
+                data["mock"] = self.runs[key]["mock"]
+            return data
         finally:
             tracer.close()
 
