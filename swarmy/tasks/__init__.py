@@ -10,13 +10,14 @@ import yaml
 
 from .base import Grade, TaskInstance
 from .code import CodeTask
+from .greenhouse import GreenhouseTask
 from .mission import MissionTask
 from .mixed import MixedTask
 from .qa import QATask
 
 __all__ = ["FAMILIES", "Grade", "TaskInstance", "make_task", "parse_task_spec"]
 
-FAMILIES = {"qa": QATask, "code": CodeTask, "mixed": MixedTask, "mission": MissionTask}
+FAMILIES = {"qa": QATask, "code": CodeTask, "mixed": MixedTask, "mission": MissionTask, "greenhouse": GreenhouseTask}
 
 
 def make_task(family: str, params: dict | None = None, seed: int = 1) -> TaskInstance:

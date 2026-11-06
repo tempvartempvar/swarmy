@@ -77,6 +77,55 @@ swarmy sweep configs/sweeps/smoke.yaml     # asks for confirmation before spendi
 swarmy report                              # latest sweep -> results/reports/<name>-<id>/report.md
 ```
 
+## Worked example: the greenhouse exercise (OpenRouter only)
+
+A small, end-to-end exercise that needs planning, research, simulation, product testing and
+iteration, run by a squad of cheap OpenRouter models. You only need `OPENROUTER_API_KEY` in `.env`.
+
+**The job.** GreenLoop is piloting an automatic irrigation controller for greenhouse Zone 3. The
+team has to:
+
+1. **Plan:** split the work between research, engineering and testing.
+2. **Research:** find, in a 16-document knowledge base, which crop and pump Zone 3 actually has, the
+   soil physics, how rain is absorbed, the quiet hours, the water budget and the acceptance criteria.
+   Some documents are traps: another zone, a superseded 2019 physics note, a memo about next year's
+   pump.
+3. **Simulate:** build `sim.py`, one hour of the zone's soil moisture, from the documented physics,
+   and use it to try controller strategies.
+4. **Product-test:** `run_tests` checks `sim.py` on sample inputs and runs `controller.py` through two
+   official 30-day weather scenarios, reporting every criterion: time in the crop's moisture band,
+   never wilting, the water budget, no pumping in quiet hours.
+5. **Iterate** until everything passes, and write up what changed in `TEST_REPORT.md`.
+
+It's graded automatically: hidden simulator checks (35%) plus six hidden 30-day scenarios (heat
+wave, rainy and dry spells...) that the controller must pass (65%). Each seed is a different
+greenhouse, and naive controllers (never water, flood by day, ignore quiet hours) score zero.
+
+**The squad** (`configs/orgs/openrouter-squad.yaml`): a Claude Haiku Field Marshal (via OpenRouter)
+commanding a research captain (DeepSeek) with two scouts, an engineering captain (DeepSeek) with two
+sappers, and a test captain (Qwen) with a tester. The soldiers are gpt-oss-120b and Qwen Flash. Each
+position has a goal. There's an org-wide `orders` wiki for researched facts and a log per unit.
+Captains can talk to each other, and testers can talk to sappers directly.
+
+```bash
+swarmy run --org configs/orgs/openrouter-squad.yaml --task greenhouse --budget 1
+```
+```bash
+swarmy orders                 # how the Field Marshal planned and handed out the work
+```
+```bash
+swarmy wiki                   # the facts the scouts recorded, and who wrote what
+```
+
+Or, in the designer, open `openrouter-squad`, choose **Greenhouse controller** in the Manoeuvres tab,
+untick mock, and watch it in the run explorer. One run usually costs a few cents to about $0.30. To
+compare structures on it (a lone Haiku, Haiku commanding four soldiers directly, and the squad),
+use the sweep, which is capped at $3:
+
+```bash
+swarmy sweep configs/sweeps/greenhouse.yaml
+```
+
 ## Order of battle (the designer)
 
 ```bash
@@ -363,6 +412,8 @@ manager the same model.
 | `qa` | `qa:kind=census` | scan many docs, filter, count | by partitioning the docs |
 | `code` | `code:n=6,coupling=0.3` | implement n precisely specified functions (one module each) against hidden tests | `coupling` sets how many functions build on others: 0 = independent, 1 = chains |
 | `mixed` | `mixed:products=5,cities=4,rules=5` | find pricing, shipping and tax policy in the knowledge base, then implement `quote(order)` | research fans out; the code needs everything put together |
+| `greenhouse` | `greenhouse` (vary `--seed`) | research a greenhouse, build a simulator and an irrigation controller, product-test against 30-day scenarios, iterate (see the worked example) | research and building in parallel, then test and fix loops |
+| `mission` | `swarmy run --mission "..."` | any open-ended objective you write; ungraded | whatever the commanders decide |
 
 All tasks are generated from the seed in the spec. The world is a fictional set of countries,
 cities, companies, people and products, written up as about 110 short documents. Facts are
@@ -427,6 +478,7 @@ These assume about 8k prompt tokens (mostly cached) and 1.5k output tokens:
 | `pilot` | flatness with a realistic model mix (Sonnet commander, Haiku officers, cheap privates) at 4 privates | 16 |
 | `model-swap` | the regiment; privates' model × colonel's effort | 12 |
 | `chain-of-command` | the full Opus→Opus→Sonnet→Haiku→private field army, flattened step by step at 8 privates | 4 |
+| `greenhouse` | the greenhouse exercise with cheap OpenRouter models: lone Haiku vs Haiku + 4 soldiers vs the 3-unit squad, 2 seeds | 6 (≤ $3) |
 | `communication` | **same structure and model, different information flow**: strict tree vs team wiki vs org wiki vs peers vs skip-level vs open | 36 |
 
 ## Metrics (in `report.md`, `runs.csv`, `levels.csv`)

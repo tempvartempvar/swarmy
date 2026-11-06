@@ -1,0 +1,18 @@
+# The greenhouse exercise (plan, research, simulate, test, iterate) with cheap OpenRouter models only:
+# a lone Haiku vs Haiku commanding 4 gpt-oss privates directly vs the 3-unit openrouter-squad.
+# Needs only OPENROUTER_API_KEY. 6 runs, capped at $3 in total (usually far less).
+name: greenhouse
+budget_usd: 3.0
+concurrency: 2
+run_timeout_s: 1800
+orgs:
+  - generate:
+      name: or
+      workers: 4
+      depths: [1]
+      include_solo: true
+      ladder: [{model: haiku-or, effort: medium}]
+      worker: {model: gpt-oss-120b}
+  - path: configs/orgs/openrouter-squad.yaml
+tasks:
+  - {family: greenhouse, seeds: [1, 2]}

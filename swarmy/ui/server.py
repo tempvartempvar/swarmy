@@ -35,6 +35,8 @@ SAFE_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 RUN_ID = re.compile(r"^run_[0-9]{8}-[0-9]{6}_[0-9a-f]{6}$")
 
 TASK_FAMILIES = [
+    {"family": "greenhouse", "label": "Exercise",
+     "presets": [{"label": "Greenhouse controller: plan, research, simulate, test, iterate", "spec": "greenhouse"}]},
     {"family": "qa", "label": "Research question",
      "presets": [{"label": "Multi-hop chain (sequential)", "spec": "qa:kind=chain,hops=3"},
                  {"label": "Aggregate over 6 items (parallel)", "spec": "qa:kind=aggregate,n=6"},

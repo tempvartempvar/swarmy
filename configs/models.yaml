@@ -19,7 +19,7 @@
 #
 # Model fields: endpoint, model, price {input, output, cache_read, cache_write, long-context tier},
 # max_concurrency, rpm, effort_levels, and for anthropic endpoints refusal_fallback / thinking.
-# Prices: Anthropic list prices as of 2026-10; OpenRouter snapshot 2026-11-03 (`swarmy models check`).
+# Prices: Anthropic list prices as of 2026-10; OpenRouter snapshot 2026-11-06 (`swarmy models check`).
 
 endpoints:
   # vllm:
@@ -96,7 +96,7 @@ models:
   gpt-oss-120b:
     endpoint: openrouter
     model: openai/gpt-oss-120b
-    price: {input: 0.025, output: 0.092}
+    price: {input: 0.012, output: 0.044}
     max_concurrency: 16
 
   qwen-flash:
@@ -108,7 +108,7 @@ models:
   deepseek-flash:
     endpoint: openrouter
     model: deepseek/deepseek-v4.1-flash
-    price: {input: 0.045, output: 0.50}
+    price: {input: 0.051, output: 0.567}
     max_concurrency: 16
 
   # Claude through OpenRouter, for anyone who only has an OpenRouter key.
