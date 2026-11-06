@@ -1,0 +1,42 @@
+# A general staff with an uneven tree, named positions, knowledge sharing and communication rules.
+# Scouts (éclaireurs) do the research, sappers (sapeurs) build things.
+# Open it in the designer with `swarmy ui`, or run it:
+#   swarmy run --org configs/orgs/etat-major.yaml --task mixed --budget 1
+name: etat-major
+description: Uneven general staff with orders, company notebooks, and skip-level questions allowed
+tree:
+  role: maréchal
+  model: sonnet
+  effort: medium
+  children:
+    - role: colonel
+      name: colonel-du-renseignement
+      model: haiku
+      prompt: You own reconnaissance. Make sure findings are written to the wiki before reporting.
+      children:
+        - {role: éclaireur, model: gpt-oss-120b}
+        - {role: éclaireur, model: gpt-oss-120b}
+        - {role: éclaireur, model: qwen-flash}
+    - role: colonel
+      name: colonel-du-genie
+      model: haiku
+      children:
+        - {role: sapeur, model: gpt-oss-120b}
+        - {role: sapeur, model: haiku}
+knowledge:
+  wikis:
+    - name: ordres
+      scope: org
+      write: managers
+      publish_brief: true
+      description: Orders, plans and interfaces from the staff.
+    - name: carnet
+      scope: team
+      description: Each unit's working notebook.
+communication:
+  chain: true
+  peers: true
+  skip_up: 1
+  cc_skipped: true
+  modes: [ask, message]
+  max_messages: 6

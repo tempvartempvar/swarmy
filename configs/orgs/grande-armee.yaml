@@ -1,0 +1,23 @@
+# The full chain of command: 31 agents, 16 of them musketeers doing the hands-on work.
+# Expensive: an Opus max-effort connétable plus two Opus maréchaux can cost $1-4 per run.
+# Try it with `swarmy run --org configs/orgs/grande-armee.yaml --task mixed --budget 3`.
+name: grande-armee
+description: Opus connétable (max) -> Opus maréchaux (medium) -> Sonnet colonels -> Haiku capitaines -> free mousquetaires
+levels:
+  - role: connétable
+    model: opus
+    effort: max
+    span: 2
+  - role: maréchal
+    model: opus
+    effort: medium
+    span: 2
+  - role: colonel
+    model: sonnet
+    effort: medium
+    span: 2
+  - role: capitaine
+    model: haiku
+    span: 2
+  - role: mousquetaire
+    model: gemma-free     # rate-limited; swap with --model mousquetaire=gpt-oss-120b for real sweeps

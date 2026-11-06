@@ -25,6 +25,7 @@ from pydantic import ValidationError
 from ..catalog import Catalog
 from ..config import GenerateSpec, OrgConfig, load_org
 from ..paths import CONFIG_DIR, DEFAULT_RESULTS_DIR
+from ..ranks import GLOSS, OFFICER_LADDER, SOLO_RANK, WORKER_RANK, management_ranks
 from ..rules import KIND_LABELS, all_contacts, wiki_instances
 
 STATIC = Path(__file__).parent / "static"
@@ -32,6 +33,7 @@ EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"]
 # Rough output tokens per call by effort, for the cost hint only.
 TYPICAL_OUTPUT = {None: 1500, "low": 700, "medium": 1500, "high": 3000, "xhigh": 5000, "max": 8000}
 SAFE_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+RUN_ID = re.compile(r"^run_[0-9]{8}-[0-9]{6}_[0-9a-f]{6}$")
 
 TASK_FAMILIES = [
     {"family": "qa", "label": "Research question",
@@ -64,6 +66,7 @@ class UIState:
         self.results_dir = results_dir
         self.catalog = catalog
         self.runs: dict[str, dict] = {}
+        self.stores: dict[str, dict] = {}
         self.lock = threading.Lock()
 
     # ---- catalog ----
@@ -77,7 +80,9 @@ class UIState:
         return {"models": models, "efforts": EFFORT_LEVELS, "kinds": KIND_LABELS,
                 "keys": {"anthropic": bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")),
                          "openrouter": bool(os.environ.get("OPENROUTER_API_KEY"))},
-                "tasks": TASK_FAMILIES}
+                "tasks": TASK_FAMILIES,
+                "ranks": {"ladder": OFFICER_LADDER, "worker": WORKER_RANK, "solo": SOLO_RANK, "gloss": GLOSS,
+                          "by_depth": {d: management_ranks(d) for d in range(1, 9)}}}
 
     # ---- orgs ----
     def list_orgs(self) -> list[dict]:
@@ -160,7 +165,7 @@ class UIState:
         if depth == 0:
             top = spec.ladder[0]
             org = OrgConfig.model_validate({"name": spec.name, "levels": [
-                {"role": top.role or "solo", "model": top.model, "effort": top.effort}]})
+                {"role": top.role or SOLO_RANK, "model": top.model, "effort": top.effort}]})
         else:
             org = spec.build()[0]
             org = org.model_copy(update={"name": spec.name})
@@ -190,7 +195,13 @@ class UIState:
         run_key = f"ui{int(time.time() * 1000)}"
         rec = {"key": run_key, "status": "running", "events": [], "states": {}, "costs": {}, "total_cost": 0.0,
                "summary": None, "error": None, "org": org.name, "task": task.task_id, "mock": mock,
-               "budget": budget, "started": time.time()}
+               "budget": budget, "started": time.time(), "run_id": None}
+        stores: dict = {}
+
+        def on_start(ctx) -> None:
+            stores["wiki"] = ctx.wiki
+            with self.lock:
+                rec["run_id"] = ctx.run_id
         with self.lock:
             self.runs[run_key] = rec
 
@@ -210,10 +221,11 @@ class UIState:
         def worker() -> None:
             async def go():
                 registry = ProviderRegistry(mock=mock)
-                tracer = Tracer(self.results_dir / "orgbench.db")
+                tracer = Tracer(self.results_dir / "swarmy.db")
                 try:
                     return await run_one(org, task, catalog=self.catalog, registry=registry, tracer=tracer,
-                                         results_dir=self.results_dir, run_cap=budget, listener=listener)
+                                         results_dir=self.results_dir, run_cap=budget, listener=listener,
+                                         on_start=on_start)
                 finally:
                     await registry.aclose()
                     tracer.close()
@@ -226,8 +238,56 @@ class UIState:
                 with self.lock:
                     rec["status"], rec["error"] = "error", f"{e}\n{traceback.format_exc()[-1500:]}"
 
+        self.stores[run_key] = stores
         threading.Thread(target=worker, daemon=True).start()
         return {"run": run_key, "task": task.task_id, "brief": task.brief[:1500]}
+
+    # ---- wikis ----
+    def live_wikis(self, key: str) -> dict:
+        store = self.stores.get(key, {}).get("wiki")
+        if store is None:
+            raise KeyError(key)
+        rec = self.runs[key]
+        return {"run_id": rec["run_id"], "org": rec["org"], "task": rec["task"], "status": rec["status"],
+                **store.to_json()}
+
+    def archive(self) -> list[dict]:
+        out = []
+        runs_dir = self.results_dir / "runs"
+        if not runs_dir.exists():
+            return out
+        for f in runs_dir.glob("run_*/wikis/wikis.json"):
+            run_dir = f.parent.parent
+            meta = {}
+            try:
+                meta = json.loads((run_dir / "result.json").read_text())
+            except Exception:
+                pass
+            data = json.loads(f.read_text())
+            n_pages = sum(len(i["pages"]) for i in data["instances"])
+            n_edits = sum(len(p["revisions"]) for i in data["instances"] for p in i["pages"])
+            out.append({"run_id": run_dir.name, "org": meta.get("org_name"), "task": meta.get("task_id"),
+                        "status": meta.get("status"), "score": meta.get("score"), "pages": n_pages,
+                        "edits": n_edits, "mtime": f.stat().st_mtime})
+        out.sort(key=lambda r: -r["mtime"])
+        return out[:100]
+
+    def archived_wikis(self, run_id: str) -> dict:
+        if not RUN_ID.match(run_id):
+            raise ValueError("bad run id")
+        from ..wiki import load
+
+        run_dir = self.results_dir / "runs" / run_id
+        data = load(run_dir)
+        if data is None:
+            raise KeyError(run_id)
+        meta = {}
+        try:
+            meta = json.loads((run_dir / "result.json").read_text())
+        except Exception:
+            pass
+        return {"run_id": run_id, "org": meta.get("org_name"), "task": meta.get("task_id"),
+                "status": meta.get("status", "finished"), **data}
 
     def run_state(self, key: str, since: int) -> dict:
         with self.lock:
@@ -240,7 +300,7 @@ class UIState:
 
 def make_handler(state: UIState):
     class Handler(BaseHTTPRequestHandler):
-        server_version = "orgbench-ui"
+        server_version = "swarmy-ui"
 
         def log_message(self, fmt, *args):
             pass
@@ -274,9 +334,15 @@ def make_handler(state: UIState):
                     return self._json(state.list_orgs())
                 if path.startswith("/api/orgs/"):
                     return self._json(state.load(path.rsplit("/", 1)[1]))
+                if path.startswith("/api/runs/") and path.endswith("/wikis"):
+                    return self._json(state.live_wikis(path.split("/")[3]))
                 if path.startswith("/api/runs/"):
                     since = int((parse_qs(url.query).get("since") or ["0"])[0])
                     return self._json(state.run_state(path.rsplit("/", 1)[1], since))
+                if path == "/api/archive":
+                    return self._json(state.archive())
+                if path.startswith("/api/archive/") and path.endswith("/wikis"):
+                    return self._json(state.archived_wikis(path.split("/")[3]))
                 self._json({"error": "not found"}, 404)
             except FileNotFoundError:
                 self._json({"error": "not found"}, 404)

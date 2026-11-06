@@ -157,7 +157,7 @@ for c in cases:
     except BaseException as e:
         signal.alarm(0)
         results.append({"ok": False, "error": (type(e).__name__ + ": " + str(e))[:160]})
-sys.stdout.write("\n__ORGBENCH_RESULT__" + json.dumps(results) + "\n")
+sys.stdout.write("\n__SWARMY_RESULT__" + json.dumps(results) + "\n")
 '''
 
 
@@ -165,10 +165,10 @@ def run_cases(workspace: Path, cases: list[dict], timeout: float = 90) -> list[d
     """Run cases against a *copy* of the workspace. Returns one result dict per case."""
     if not cases:
         return []
-    with tempfile.TemporaryDirectory(prefix="orgbench-grade-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="swarmy-grade-") as tmp:
         tmp = Path(tmp)
         ws = tmp / "ws"
-        shutil.copytree(workspace, ws, ignore=shutil.ignore_patterns("__pycache__", ".orgbench"))
+        shutil.copytree(workspace, ws, ignore=shutil.ignore_patterns("__pycache__", ".swarmy"))
         (tmp / "cases.json").write_text(json.dumps(cases))
         (tmp / "runner.py").write_text(RUNNER)
         try:
@@ -180,9 +180,9 @@ def run_cases(workspace: Path, cases: list[dict], timeout: float = 90) -> list[d
             out = proc.stdout
         except subprocess.TimeoutExpired:
             return [{"ok": False, "error": "grading timed out"} for _ in cases]
-        marker = out.rfind("__ORGBENCH_RESULT__")
+        marker = out.rfind("__SWARMY_RESULT__")
         if marker < 0:
             err = (proc.stderr or "no output")[-300:]
             return [{"ok": False, "error": f"runner failed: {err}"} for _ in cases]
-        line = out[marker + len("__ORGBENCH_RESULT__"):].splitlines()[0]
+        line = out[marker + len("__SWARMY_RESULT__"):].splitlines()[0]
         return json.loads(line)

@@ -146,7 +146,7 @@ class Catalog:
             return ModelSpec(alias=name, provider="openrouter", model=model_id, price=Price(input=0, output=0))
         meta = self.openrouter_models().get(model_id)
         if meta is None:
-            raise KeyError(f"OpenRouter has no model {model_id!r} (run `orgbench models refresh`).")
+            raise KeyError(f"OpenRouter has no model {model_id!r} (run `swarmy models refresh`).")
         params = meta.get("supported_parameters") or []
         if "tools" not in params:
             raise ValueError(f"OpenRouter model {model_id!r} does not support tool calling.")

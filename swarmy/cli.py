@@ -1,4 +1,4 @@
-"""Command line interface: orgbench run | sweep | plan | report | org | task | models."""
+"""Command line interface: swarmy run | sweep | plan | report | org | task | models."""
 
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ def _add_org_overrides(p):
 
 def _paths(args) -> tuple[Path, Path]:
     results = Path(args.results)
-    return results, Path(args.db) if args.db else results / "orgbench.db"
+    return results, Path(args.db) if args.db else results / "swarmy.db"
 
 
 def cmd_run(args) -> int:
@@ -189,13 +189,51 @@ def cmd_models(args) -> int:
     return 0
 
 
+def cmd_wiki(args) -> int:
+    from .wiki import load, render_markdown
+
+    results, _ = _paths(args)
+    runs_dir = results / "runs"
+    if args.run in (None, "latest"):
+        found = sorted(runs_dir.glob("run_*/wikis/wikis.json"), key=lambda f: f.stat().st_mtime)
+        if not found:
+            raise SystemExit(f"no runs with wiki pages under {runs_dir}")
+        run_dir = found[-1].parent.parent
+    else:
+        run_dir = runs_dir / args.run
+    data = load(run_dir)
+    if data is None:
+        raise SystemExit(f"{run_dir.name} has no wiki pages")
+    print(f"run {run_dir.name}\n")
+    for inst in data["instances"]:
+        if args.wiki and inst["id"] != args.wiki:
+            continue
+        if not inst["pages"]:
+            continue
+        if args.page:
+            for page in inst["pages"]:
+                if page["title"].lower() == args.page.lower():
+                    print(render_markdown(inst, page))
+            continue
+        print(f"{inst['id']}  ({inst['label']})")
+        for page in inst["pages"]:
+            cur = page["revisions"][-1]
+            people = sorted({f"{r['author']} [{r['role']}]" for r in page["revisions"]})
+            print(f"  - {page['title']}: v{cur['version']}, last by {cur['author']} [{cur['role']}], "
+                  f"{len(cur['content'])} chars; editors: {', '.join(people)}")
+        print()
+    if not args.page:
+        print("Show a page with: swarmy wiki RUN --page TITLE [--wiki ID]")
+    return 0
+
+
 def cmd_ui(args) -> int:
     from .ui.server import serve
 
     results, _ = _paths(args)
     httpd = serve(args.host, args.port, Path(args.orgs_dir) if args.orgs_dir else None, results, args.models)
     host, port = httpd.server_address[:2]
-    print(f"orgbench UI on http://{host}:{port}  (Ctrl+C to stop)")
+    print(f"swarmy UI on http://{host}:{port}  (Ctrl+C to stop)")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
@@ -207,10 +245,10 @@ def cmd_ui(args) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     load_dotenv()
-    ap = argparse.ArgumentParser(prog="orgbench", description=__doc__)
+    ap = argparse.ArgumentParser(prog="swarmy", description=__doc__)
     ap.add_argument("--models", default=None, help="model catalog YAML (default: configs/models.yaml)")
     ap.add_argument("--results", default=str(DEFAULT_RESULTS_DIR), help="results directory (default: results)")
-    ap.add_argument("--db", default=None, help="SQLite path (default: <results>/orgbench.db)")
+    ap.add_argument("--db", default=None, help="SQLite path (default: <results>/swarmy.db)")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser("run", help="run one org on one task")
@@ -252,6 +290,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--seed", type=int, default=1)
     p.add_argument("--gold", action="store_true")
     p.set_defaults(fn=cmd_task)
+
+    p = sub.add_parser("wiki", help="browse the wikis a run produced, with who edited what")
+    p.add_argument("run", nargs="?", default="latest", help="run id (default: latest run with wiki pages)")
+    p.add_argument("--wiki", help="only this wiki instance, e.g. carnet/capitaine-1")
+    p.add_argument("--page", help="print this page with its revision history")
+    p.set_defaults(fn=cmd_wiki)
 
     p = sub.add_parser("ui", help="open the interactive org designer in your browser")
     p.add_argument("--host", default="127.0.0.1")

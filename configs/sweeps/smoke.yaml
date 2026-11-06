@@ -8,7 +8,7 @@ orgs:
       name: haiku-flat
       workers: 3
       depths: [1]
-      ladder: [{model: haiku, role: lead}]
+      ladder: [{model: haiku}]
       worker: {model: gpt-oss-120b}
 tasks:
   - {family: qa, params: {kind: chain, hops: 2}, seeds: [1]}

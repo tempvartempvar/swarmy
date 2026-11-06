@@ -1,6 +1,6 @@
-# Baseline: a single agent does everything itself.
+# Baseline: a lone franc-tireur does everything itself, no chain of command.
 name: solo-opus
 levels:
-  - role: solo
+  - role: franc-tireur
     model: opus
     effort: medium

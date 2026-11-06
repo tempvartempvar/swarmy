@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from orgbench.tasks import make_task, parse_task_spec
-from orgbench.tasks.qa import match_answer
+from swarmy.tasks import make_task, parse_task_spec
+from swarmy.tasks.qa import match_answer
 
 
 @pytest.mark.parametrize("family,params", [

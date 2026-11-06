@@ -5,14 +5,14 @@ import asyncio
 import pytest
 import yaml
 
-from orgbench.catalog import Catalog
-from orgbench.config import OrgConfig, load_org
-from orgbench.paths import CONFIG_DIR
-from orgbench.providers import ProviderRegistry
-from orgbench.rules import all_contacts, relation, skipped_managers, wiki_instances
-from orgbench.runner import run_one
-from orgbench.tasks import make_task
-from orgbench.tracing import Tracer
+from swarmy.catalog import Catalog
+from swarmy.config import OrgConfig, load_org
+from swarmy.paths import CONFIG_DIR
+from swarmy.providers import ProviderRegistry
+from swarmy.rules import all_contacts, relation, skipped_managers, wiki_instances
+from swarmy.runner import run_one
+from swarmy.tasks import make_task
+from swarmy.tracing import Tracer
 
 TREE = {
     "name": "uneven",
@@ -157,12 +157,12 @@ def test_messaging_and_wikis_in_a_run(tmp_path):
 
 
 def test_prompt_lists_wikis_and_contacts(tmp_path):
-    from orgbench.agents import build_tree
-    from orgbench.budget import RunBudget
-    from orgbench.prompts import system_prompt
-    from orgbench.runner import RunContext
-    from orgbench.tools import tool_specs
-    from orgbench.tracing import Transcript
+    from swarmy.agents import build_tree
+    from swarmy.budget import RunBudget
+    from swarmy.prompts import system_prompt
+    from swarmy.runner import RunContext
+    from swarmy.tools import tool_specs
+    from swarmy.tracing import Transcript
 
     org = _levels_org(knowledge={"wikis": [{"name": "handbook", "write": "managers"}]},
                       communication={"chain": True, "skip_up": 1, "modes": ["ask"]})

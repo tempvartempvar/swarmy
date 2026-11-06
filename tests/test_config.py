@@ -1,8 +1,8 @@
 import pytest
 
-from orgbench.catalog import Catalog
-from orgbench.config import GenerateSpec, LevelSpec, OrgConfig, balanced_spans, load_org
-from orgbench.paths import CONFIG_DIR
+from swarmy.catalog import Catalog
+from swarmy.config import GenerateSpec, LevelSpec, OrgConfig, balanced_spans, load_org
+from swarmy.paths import CONFIG_DIR
 
 
 def test_example_orgs_load_and_resolve():
@@ -16,7 +16,7 @@ def test_example_orgs_load_and_resolve():
 
 
 def test_corporate_metrics():
-    org = load_org(CONFIG_DIR / "orgs" / "corporate-5tier.yaml")
+    org = load_org(CONFIG_DIR / "orgs" / "grande-armee.yaml")
     m = org.metrics()
     assert m["shape"] == "1-2-4-8-16"
     assert m["n_agents"] == 31 and m["n_workers"] == 16 and m["depth"] == 4
@@ -24,12 +24,12 @@ def test_corporate_metrics():
 
 
 def test_overrides_swap_models_and_rename():
-    org = load_org(CONFIG_DIR / "orgs" / "two-tier.yaml")
-    new = org.with_overrides({"worker": "qwen-flash", "top": "opus"}, {"lead": "high"}, ["levels.1.span=4"])
+    org = load_org(CONFIG_DIR / "orgs" / "regiment.yaml")
+    new = org.with_overrides({"mousquetaire": "qwen-flash", "top": "opus"}, {"colonel": "high"}, ["levels.1.span=4"])
     assert new.levels[0].model == "opus" and new.levels[0].effort == "high"
     assert new.levels[2].model == "qwen-flash"
     assert new.n_workers == 8
-    assert new.name.startswith("two-tier[")
+    assert new.name.startswith("regiment[")
     with pytest.raises(KeyError):
         org.with_overrides({"nope": "haiku"})
 
@@ -59,15 +59,15 @@ def test_generate_removes_middle_tiers_first():
                         worker={"model": "gpt-oss-120b"})
     orgs = {o.name: o for o in spec.build()}
     assert [l.role for l in orgs["corp-solo"].levels] == ["ceo"]
-    assert [l.role for l in orgs["corp-d1"].levels] == ["ceo", "worker"]
-    assert [l.role for l in orgs["corp-d2"].levels] == ["ceo", "manager", "worker"]
-    assert [l.role for l in orgs["corp-d3"].levels] == ["ceo", "director", "manager", "worker"]
-    assert [l.role for l in orgs["corp-d4"].levels] == ["ceo", "c-suite", "director", "manager", "worker"]
+    assert [l.role for l in orgs["corp-d1"].levels] == ["ceo", "mousquetaire"]
+    assert [l.role for l in orgs["corp-d2"].levels] == ["ceo", "manager", "mousquetaire"]
+    assert [l.role for l in orgs["corp-d3"].levels] == ["ceo", "director", "manager", "mousquetaire"]
+    assert [l.role for l in orgs["corp-d4"].levels] == ["ceo", "c-suite", "director", "manager", "mousquetaire"]
     assert all(o.n_workers == 8 for n, o in orgs.items() if n != "corp-solo")
 
 
 def test_catalog_shorthand_and_costs():
-    from orgbench.providers.base import Usage
+    from swarmy.providers.base import Usage
 
     cat = Catalog.load(offline=True)
     assert cat.resolve("anthropic:claude-sonnet-5-5").price.input == 2.0
@@ -79,3 +79,25 @@ def test_catalog_shorthand_and_costs():
     assert short == pytest.approx((10_000 * 0.10 + 1_000 * 0.50) / 1e6)
     assert long == pytest.approx((150_000 * 0.50 + 1_000 * 2.50) / 1e6)  # long-context tier
     assert cat.resolve("opus").map_effort("max") == "max"
+
+
+def test_default_titles_are_french_ranks():
+    from swarmy.ranks import management_ranks, rank_between
+
+    spec = GenerateSpec(name="g", workers=8, depths=[1, 2, 4], include_solo=True, ladder=[{"model": "sonnet"}],
+                        worker={"model": "haiku"})
+    orgs = {o.name: [lv.role for lv in o.levels] for o in spec.build()}
+    assert orgs["g-solo"] == ["franc-tireur"]
+    assert orgs["g-d1"] == ["capitaine", "mousquetaire"]
+    assert orgs["g-d2"] == ["colonel", "capitaine", "mousquetaire"]
+    assert orgs["g-d4"] == ["connétable", "maréchal", "colonel", "capitaine", "mousquetaire"]
+    assert len(management_ranks(15)) == 15
+    assert rank_between("colonel", "capitaine") == "major"
+    assert rank_between("capitaine", "mousquetaire") == "lieutenant"
+
+
+def test_auto_names_slug_spaces():
+    org = OrgConfig.model_validate({"name": "x", "levels": [{"role": "chef de bataillon", "model": "haiku", "span": 2},
+                                                             {"role": "mousquetaire", "model": "haiku"}]})
+    assert [n.name for n in org.nodes()] == ["chef-de-bataillon", "mousquetaire-1", "mousquetaire-2"]
+    assert org.is_uniform()

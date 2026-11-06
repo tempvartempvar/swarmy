@@ -1,23 +1,29 @@
-# orgbench
+# swARMY
 
-A testbench for comparing **organizational hierarchies of LLM agents**. You describe an org
-chart (levels, span of control, a model and effort level per tier), point it at a suite of
-coding and research tasks, and orgbench runs it under a hard dollar budget, grades the
-output, and reports quality, cost, and coordination metrics for each structure.
+A testbench for comparing **chains of command for swarms of LLM agents**. You describe an order
+of battle (ranks, how many subordinates each officer commands, a model and effort level per
+position), point it at a suite of coding and research tasks, and swARMY runs it under a hard dollar
+budget, grades the output, and reports quality, cost, and coordination metrics for each structure.
+
+Positions default to ranks of the old French army: a *connétable* at the top, then *maréchaux*,
+*colonels* and *capitaines*, with *mousquetaires* doing the hands-on work and a lone *franc-tireur*
+as the single-agent baseline. Titles are only labels: behaviour comes from a position's place in
+the tree, its model and its tools. Rename any position to anything you like.
 
 ```
-ceo (opus, max) ─┬─ c-suite-1 (opus, medium) ─┬─ director-1.1 (sonnet) ─┬─ manager-1.1.1 (haiku) ─┬─ worker-1.1.1.1 (free model)
-                 │                             │                         │                         └─ worker-1.1.1.2
+connétable (opus, max) ─┬─ maréchal-1 (opus) ─┬─ colonel-1.1 (sonnet) ─┬─ capitaine-1.1.1 (haiku) ─┬─ mousquetaire-1.1.1.1 (free model)
+                        │                     │                        │                          └─ mousquetaire-1.1.1.2
                  ...                           ...                       ...
 ```
 
-- **A visual org designer.** `orgbench ui` opens an interactive org chart in your browser. You can
-  swap any position's model, add or remove positions and management layers, define wikis and
-  communication rules, and watch a test run move through the org live.
+- **A visual order of battle.** `swarmy ui` opens an interactive org chart in your browser. You can
+  swap any position's model, add or remove positions and ranks, define wikis and communication
+  rules, watch a test run move through the org live, and read the wikis it wrote, with who changed
+  what.
 - **Any model at any position.** Claude goes through the Anthropic API; everything else goes through
   OpenRouter. Swap models in the designer, from the CLI, in YAML, or as a sweep matrix.
 - **Knowledge sharing and communication as variables.** Wikis can be scoped to the whole org, each
-  department or each team, with read and write permissions. Direct contact (manager to report,
+  division or each unit, with read and write permissions. Direct contact (commander to subordinate,
   between teammates, across teams, skip-level, or fully open) can be switched on with rules such as
   copying the skipped managers.
 - **Flatness is a parameter.** You can generate orgs with the same number of workers and different
@@ -42,53 +48,62 @@ cp .env.example .env        # add ANTHROPIC_API_KEY and OPENROUTER_API_KEY
 Open the designer:
 
 ```bash
-orgbench ui                  # http://127.0.0.1:8765
+swarmy ui                  # http://127.0.0.1:8765
 ```
 
 Check everything offline first. The scripted mock provider runs the whole pipeline without
 making any API calls:
 
 ```bash
-orgbench run --org configs/orgs/corporate-5tier.yaml --task mixed --mock
-orgbench sweep configs/sweeps/pilot.yaml --mock
+swarmy run --org configs/orgs/grande-armee.yaml --task mixed --mock
+swarmy sweep configs/sweeps/pilot.yaml --mock
 pytest
 ```
 
 Then do a real smoke test, which costs a few cents:
 
 ```bash
-orgbench plan  configs/sweeps/smoke.yaml     # what will run, and the per-run caps
-orgbench sweep configs/sweeps/smoke.yaml     # asks for confirmation before spending
-orgbench report                              # latest sweep -> results/reports/<name>-<id>/report.md
+swarmy plan  configs/sweeps/smoke.yaml     # what will run, and the per-run caps
+swarmy sweep configs/sweeps/smoke.yaml     # asks for confirmation before spending
+swarmy report                              # latest sweep -> results/reports/<name>-<id>/report.md
 ```
 
-## Org designer
+## Order of battle (the designer)
 
 ```bash
-orgbench ui [--port 8765] [--orgs-dir configs/orgs]
+swarmy ui [--port 8765] [--orgs-dir configs/orgs]
 ```
 
-- **Chart.** Each level is a horizontal band. A card shows the position's title, name, model
-  (coloured by family) and effort, plus counts of the wikis (▤) and contacts (⇄) it has. Drag to pan,
-  scroll to zoom, collapse subtrees, and use **Stack teams** to put each team's workers in a column
-  so wide orgs stay readable.
-- **Position tab.** Click a card to see who the position reports to, its direct reports, its rough
-  cost per call, its wiki access and who it can contact. You can change its model, effort, limits,
-  title, name and role notes. The scope switch applies an edit to this position only, the whole
-  level, or every position with the same title. Structure buttons add a direct report, duplicate the
-  position (with its team), insert a manager above it, or remove it.
-- **Structure tab.** Change how many reports each manager at a level has (− / +), insert a
-  management layer below a level (each manager's reports are split among new managers), remove a
-  level, edit a whole level at once, or build a balanced org from a few numbers.
-- **Knowledge tab.** Add wikis and set their scope, who can read and write them, oversight, and
-  whether the client's brief is posted on them. Selecting a wiki outlines each instance on the chart
-  and marks who can write (solid border) and who can only read (dashed border).
-- **Communication tab.** Toggle the contact rules and set the skip-level distance. Selecting a
-  position draws a line to every colleague it may contact, coloured by type.
-- **Test run tab.** Run the org on a task, in mock mode or with real models under a hard budget, and
-  watch it live. Agents light up while they think, wait or answer; assignments and reports flash
-  along the edges; messages arc between cards; and an activity feed shows assignments, reports,
-  questions with their answers, and wiki edits as they happen.
+- **Chart.** Each rank is a horizontal band. A card shows the position's rank, name, model
+  (coloured by family) and effort, plus counts of the wikis (▤) and contacts (⇄) it has. Drag or
+  scroll to move around, Ctrl+scroll (or pinch) to zoom, and collapse any officer's command.
+- **Layouts.** *Auto* draws a normal tree while it fits across the screen at a readable size. When it
+  doesn't, each level is split into rows of units (each commander's direct subordinates, in a frame
+  labelled with the commander), so a wide army reads top to bottom instead of shrinking to fit. You
+  can also force *Tree*, *Tree, units stacked* (each unit's soldiers in a column) or *Split levels*.
+- **Position tab.** Click a card to see who the position reports to, its direct subordinates, its
+  rough cost per call, its wiki access and who it can contact. The rank is explained in English
+  (*capitaine: captain, commands a company*). You can change its model, effort, limits, rank, name
+  and role notes. The scope switch applies an edit to this position only, the whole level, or every
+  position with the same rank. Buttons add a subordinate, duplicate the position (with its unit),
+  insert an officer above it, or remove it.
+- **Ranks tab.** Change how many subordinates each officer at a level commands (− / +), insert a
+  rank below a level (each officer's subordinates are split among new officers, titled with the next
+  rank down), remove a level, edit a whole level at once, or build a balanced army from a few
+  numbers.
+- **Wikis tab.** Add wikis and set their scope, who can read and write them, oversight, and whether
+  the client's brief is posted on them. Selecting a wiki outlines each copy of it on the chart and
+  marks who can write (solid border) and who can only read (dashed border).
+- **Signals tab.** Toggle the contact rules and set the skip-level distance. Selecting a position
+  draws a line to every colleague it may contact, coloured by type.
+- **Manoeuvres tab.** Run the org on a task, in mock mode or with real models under a hard budget,
+  and watch it live. Agents light up while they think, wait or answer; orders and reports flash along
+  the edges; messages arc between cards; and an activity feed shows orders, reports, questions with
+  their answers, and wiki edits as they happen.
+- **Wiki browser.** Read every wiki a run wrote, live during the run or from any past run. For each
+  page you see who last edited it, with their rank, level and model; every contributor; the content
+  rendered as Markdown; and the full revision history, with a diff for each edit. You can filter pages
+  by the rank of the people who edited them.
 - **Save** writes `configs/orgs/<name>.yaml`, using the compact `levels` form when the tree is
   uniform and an explicit `tree` otherwise. **YAML** shows the config and lets you paste one in.
   Undo and redo cover every edit.
@@ -99,57 +114,76 @@ code the engine runs, so the chart always matches what the agents will do.
 ## Org configs
 
 ```yaml
-# configs/orgs/two-tier.yaml
-name: two-tier
-levels:                     # top to bottom; every node in a level shares its settings
-  - role: lead
+# configs/orgs/regiment.yaml
+name: regiment
+levels:                     # top to bottom; every position in a level shares its settings
+  - role: colonel           # any title; positions are named <role>-<path>, e.g. capitaine-1, mousquetaire-1.2
     model: sonnet           # alias from configs/models.yaml, or openrouter:<id> / anthropic:<id>
     effort: low             # low | medium | high | xhigh | max  (maps to Claude's effort / OpenRouter reasoning)
-    span: 2                 # direct reports per node
-  - role: manager
+    span: 2                 # direct subordinates per position
+  - role: capitaine
     model: haiku
     span: 3
-  - role: worker            # bottom level: span 0, does the hands-on work
+  - role: mousquetaire      # bottom level: span 0, does the hands-on work
     model: gpt-oss-120b
 memory: persistent          # persistent: an agent remembers earlier assignments; fresh: starts clean each time
 ```
 
 For uneven structures or per-position models, write an explicit `tree` instead of `levels`
-(see `configs/orgs/research-lab.yaml`):
+(see `configs/orgs/etat-major.yaml`):
 
 ```yaml
 tree:
-  role: director
+  role: maréchal
   model: sonnet
   children:
-    - role: lead
-      name: research-lead          # optional custom name (default: <role>-<path>, e.g. lead-1)
+    - role: colonel
+      name: colonel-du-renseignement   # optional custom name (default: <role>-<path>, e.g. colonel-1)
       model: haiku
-      children: [{role: researcher, model: gpt-oss-120b}, {role: researcher, model: qwen-flash}]
-    - {role: engineer, model: haiku}
+      children: [{role: éclaireur, model: gpt-oss-120b}, {role: éclaireur, model: qwen-flash}]
+    - {role: sapeur, model: haiku}
 ```
+
+### Ranks
+
+The generator and the designer title positions by depth using these ranks, senior first:
+connétable (Constable of France), maréchal, lieutenant-général, maréchal-de-camp, brigadier,
+colonel, major, chef-de-bataillon, capitaine, lieutenant, sergent, caporal, anspessade
+(lance-corporal). Hands-on positions are *mousquetaires*, and a single-agent org is a
+*franc-tireur*. A one-level army is a capitaine with musketeers, two levels add a colonel above,
+three a maréchal, four the connétable. The list and the English glosses live in
+`swarmy/ranks.py`.
 
 ### Knowledge sharing
 
 ```yaml
 knowledge:
   wikis:
-    - name: handbook
+    - name: ordres
       scope: org              # org | department | team
-      write: managers         # who can write: all | managers | workers
+      write: managers         # who can write: all | managers (officers) | workers (hands-on)
       read: all               # who can read
       publish_brief: true     # post the client's original assignment on it
-      description: Plans and decisions from management.
-    - name: team-notes
-      scope: team             # one wiki per team: a manager plus their direct reports
-      oversight: true         # managers above the team can read it (default)
-    - name: division
+      description: Orders and plans from the staff.
+    - name: carnet
+      scope: team             # one wiki per unit: an officer plus their direct subordinates
+      oversight: true         # officers above the unit can read it (default)
+    - name: dossier
       scope: department
-      level: 1                # one wiki per level-1 position, shared by everyone under it
+      level: 1                # one wiki per level-1 position (a division), shared by everyone under it
 ```
 
 Agents get `wiki_read`, `wiki_search` and (where permitted) `wiki_write` for the wikis they can
-reach. Their prompt lists each wiki and its scope. Final wiki contents are saved with each run.
+reach. Their prompt lists each wiki and its scope, and every page they read shows who last edited it
+and every contributor, with their ranks.
+
+Every edit is kept as a revision recording the editor's name, rank, level and model, the kind of edit
+(create, replace or append) and when in the run it happened. To read them:
+
+- the **wiki browser** in `swarmy ui` (live or past runs, with history and diffs);
+- `swarmy wiki [RUN] [--wiki ID] [--page TITLE]` on the command line;
+- the run directory: `runs/<run_id>/wikis/wikis.json` (everything) plus one Markdown file per page,
+  with a contributor list and a revision table.
 
 ### Communication rules
 
@@ -158,13 +192,13 @@ direct contact, and all of them are off by default:
 
 ```yaml
 communication:
-  chain: true          # manager <-> direct report, mid-assignment
-  peers: true          # teammates (same manager)
-  cross_team: false    # same level, different manager
+  chain: true          # commander <-> direct subordinate, mid-assignment
+  peers: true          # comrades in the same unit (same commander)
+  cross_team: false    # same rank, different unit
   open: false          # anyone may contact anyone
-  skip_up: 1           # may contact up to 1 level above their own manager
-  skip_down: 0         # managers may contact up to N levels below their direct reports
-  cc_skipped: true     # skipped managers get a copy of skip-level traffic
+  skip_up: 1           # may contact up to 1 rank above their own commander
+  skip_down: 0         # officers may contact up to N ranks below their direct subordinates
+  cc_skipped: true     # skipped officers get a copy of skip-level traffic
   modes: [ask, message]
   max_messages: 8      # per agent per run
 ```
@@ -176,7 +210,7 @@ communication:
   read are counted as `undelivered`.
 
 Each agent's tools list exactly the colleagues it may contact, and its prompt says how each one
-relates to it (manager, teammate, skip-level and so on).
+relates to it (commander, comrade, skip-level and so on).
 
 Optional level fields: `max_tokens`, `max_turns`, `can_do_work` (gives managers hands-on
 tools as well), `review_tools` (lets managers read the workspace and run the public tests;
@@ -185,17 +219,17 @@ on by default), and `prompt` (extra role instructions).
 To see an org's tree and flatness metrics:
 
 ```bash
-orgbench org configs/orgs/corporate-5tier.yaml
+swarmy org configs/orgs/grande-armee.yaml
 ```
 
 ### Swapping models
 
 ```bash
 # per role (or 'top' / 'bottom'), on any command
-orgbench run --org configs/orgs/corporate-5tier.yaml --task code \
-    --model worker=openrouter:qwen/qwen3.7-flash --model ceo=sonnet --effort director=high
+swarmy run --org configs/orgs/grande-armee.yaml --task code \
+    --model mousquetaire=openrouter:qwen/qwen3.7-flash --model connétable=sonnet --effort colonel=high
 # any field, by dotted path
-orgbench run --org configs/orgs/two-tier.yaml --task qa:kind=aggregate --set levels.1.span=4 --set communication.peers=true
+swarmy run --org configs/orgs/regiment.yaml --task qa:kind=aggregate --set levels.1.span=4 --set communication.peers=true
 ```
 
 In a sweep, `models:`, `efforts:` and `set:` apply fixed overrides, and `matrix:` expands into
@@ -203,30 +237,30 @@ a Cartesian product (see `configs/sweeps/model-swap.yaml`):
 
 ```yaml
 orgs:
-  - path: configs/orgs/two-tier.yaml
+  - path: configs/orgs/regiment.yaml
     matrix:
-      worker: [gpt-oss-120b, qwen-flash, haiku]
-      effort.lead: [low, medium]
+      mousquetaire: [gpt-oss-120b, qwen-flash, haiku]
+      effort.colonel: [low, medium]
 ```
 
 The model catalog is `configs/models.yaml`. Writing `openrouter:<model-id>` uses any
-tool-capable OpenRouter model with live pricing, no catalog edit needed. `orgbench models check`
+tool-capable OpenRouter model with live pricing, no catalog edit needed. `swarmy models check`
 compares the catalog with OpenRouter's current prices and tool support.
 
 ### Generating structures that vary only in depth
 
 ```yaml
 - generate:
-    name: corp
-    workers: 8              # held constant
-    depths: [1, 2, 3, 4]    # management layers above the workers
-    include_solo: true      # also add a single-agent baseline
-    ladder:                 # management tiers, top-down
-      - {role: ceo, model: opus, effort: max}
-      - {role: c-suite, model: opus, effort: medium}
-      - {role: director, model: sonnet}
-      - {role: manager, model: haiku}
-    worker: {model: gpt-oss-120b}
+    name: armee
+    workers: 8              # hands-on positions, held constant
+    depths: [1, 2, 3, 4]    # ranks of officers above them
+    include_solo: true      # also add a lone franc-tireur baseline
+    ladder:                 # officer tiers, top-down (omit `role` to get default French ranks)
+      - {role: connétable, model: opus, effort: max}
+      - {role: maréchal, model: opus, effort: medium}
+      - {role: colonel, model: sonnet}
+      - {role: capitaine, model: haiku}
+    worker: {model: gpt-oss-120b}   # titled mousquetaire unless you set a role
 ```
 
 Spans are split as evenly as possible, with larger spans at the bottom: 8 workers at depth 3
@@ -255,7 +289,7 @@ fraction of hidden tests passed, in a subprocess.
 To read a task brief and its gold answer:
 
 ```bash
-orgbench task qa:kind=chain,hops=4 --seed 3 --gold
+swarmy task qa:kind=chain,hops=4 --seed 3 --gold
 ```
 
 ## Sweeps and budgets
@@ -282,7 +316,7 @@ How the guarantees work:
   `skipped_budget`.
 - **Run order.** Runs are interleaved (seed, then task, then org). If the budget runs out
   part-way, every org still has results on the same tasks.
-- `orgbench plan` warns when a level's single call could cost more than half the run cap. For
+- `swarmy plan` warns when a level's single call could cost more than half the run cap. For
   example, an Opus max-effort call with 32k output costs about $0.66.
 - Real sweeps ask for confirmation (`--yes` skips the prompt). If a fatal provider error happens
   (bad key, unknown model, free-tier daily quota used up), the sweep stops.
@@ -304,10 +338,10 @@ These assume about 8k prompt tokens (mostly cached) and 1.5k output tokens:
 | sweep | question | runs |
 |---|---|---|
 | `smoke` | do keys, providers and grading work? | 4 (≤ $0.50) |
-| `structure-control` | **does shape matter when every agent runs the same model (Haiku)?** depth 0-3 plus a team-board variant, 3 tasks × 3 seeds | 45 |
-| `pilot` | flatness with a realistic model mix (Sonnet lead, Haiku managers, cheap workers) at 4 workers | 16 |
-| `model-swap` | same structure; worker model × lead effort | 12 |
-| `corporate-ladder` | the full Opus→Opus→Sonnet→Haiku→worker ladder, flattened step by step at 8 workers | 4 |
+| `structure-control` | **does shape matter when every agent runs the same model (Haiku)?** depth 0-3 plus a company-notebook variant, 3 tasks × 3 seeds | 45 |
+| `pilot` | flatness with a realistic model mix (Sonnet commander, Haiku officers, cheap mousquetaires) at 4 mousquetaires | 16 |
+| `model-swap` | the regiment; mousquetaires' model × colonel's effort | 12 |
+| `chain-of-command` | the full Opus→Opus→Sonnet→Haiku→mousquetaire grande armée, flattened step by step at 8 mousquetaires | 4 |
 | `communication` | **same structure and model, different information flow**: strict tree vs team wiki vs org wiki vs peers vs skip-level vs open | 36 |
 
 ## Metrics (in `report.md`, `runs.csv`, `levels.csv`)
@@ -338,7 +372,7 @@ broken down by task family.
 
 ## Experiment design notes
 
-- **Separate structure from model mix.** In the corporate ladder, a deeper org also has more
+- **Separate structure from model mix.** In the chain-of-command sweep, a deeper org also has more
   expensive managers, so depth and model quality change together. Run `structure-control`, which
   uses the same model everywhere, alongside any mixed-model sweep.
 - **Vary task parallelizability.** Hierarchy should help on `qa:kind=aggregate` and
@@ -358,10 +392,10 @@ broken down by task family.
 
 ```
 results/
-  orgbench.db                       # sweeps, runs, calls, events (SQLite)
+  swarmy.db                       # sweeps, runs, calls, events (SQLite)
   runs/<run_id>/transcript.jsonl    # every input, step (text, thinking summary, tool calls) and tool result
   runs/<run_id>/workspace/          # final shared workspace
-  runs/<run_id>/wikis/              # final wiki pages, one folder per wiki instance
+  runs/<run_id>/wikis/              # wikis.json (every revision) + one Markdown file per page
   runs/<run_id>/result.json         # grade and per-node cost and calls
   reports/<sweep>-<id>/             # report.md, charts, runs.csv, levels.csv, summary.json
 ```
@@ -379,13 +413,13 @@ results/
   its environment, plus CPU, memory and file-size limits and a timeout. That is not a security
   boundary. Run real sweeps in a container or VM.
 - **Prices.** Anthropic prices are list prices. OpenRouter prices in the catalog are a snapshot
-  (`orgbench models check` compares them with live prices). For OpenRouter calls, the cost the
+  (`swarmy models check` compares them with live prices). For OpenRouter calls, the cost the
   provider reports is what gets logged.
 
 ## Extending
 
-- **New task family:** subclass `TaskInstance` (`orgbench/tasks/base.py`) and set `brief`,
+- **New task family:** subclass `TaskInstance` (`swarmy/tasks/base.py`) and set `brief`,
   `grade()`, and optionally `corpus`, `workspace_files`, `public_tests()`, `progress()` and
-  `key_terms`. Then register it in `orgbench/tasks/__init__.py`.
+  `key_terms`. Then register it in `swarmy/tasks/__init__.py`.
 - **New provider:** implement `Provider.new_conversation()` and `Provider.step()`
-  (`orgbench/providers/base.py`), then add it to `ProviderRegistry`.
+  (`swarmy/providers/base.py`), then add it to `ProviderRegistry`.

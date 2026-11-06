@@ -5,17 +5,17 @@ import json
 
 import yaml
 
-from orgbench.analysis import write_report
-from orgbench.catalog import Catalog
-from orgbench.cli import main
-from orgbench.config import LevelSpec, OrgConfig
-from orgbench.paths import CONFIG_DIR
-from orgbench.providers import ProviderRegistry, ToolCall
-from orgbench.runner import run_one
-from orgbench.sweep import load_sweep, plan_sweep, run_sweep
-from orgbench.tasks import make_task
-from orgbench.tools import Toolbox, tool_specs
-from orgbench.tracing import Tracer
+from swarmy.analysis import write_report
+from swarmy.catalog import Catalog
+from swarmy.cli import main
+from swarmy.config import LevelSpec, OrgConfig
+from swarmy.paths import CONFIG_DIR
+from swarmy.providers import ProviderRegistry, ToolCall
+from swarmy.runner import run_one
+from swarmy.sweep import load_sweep, plan_sweep, run_sweep
+from swarmy.tasks import make_task
+from swarmy.tools import Toolbox, tool_specs
+from swarmy.tracing import Tracer
 
 
 def _org(**kw):
@@ -49,10 +49,10 @@ def test_mock_run_records_hierarchy(tmp_path):
 
 
 def test_tool_permissions(tmp_path):
-    from orgbench.agents import build_tree
-    from orgbench.runner import RunContext
-    from orgbench.tracing import Transcript
-    from orgbench.budget import RunBudget
+    from swarmy.agents import build_tree
+    from swarmy.runner import RunContext
+    from swarmy.tracing import Transcript
+    from swarmy.budget import RunBudget
 
     task = make_task("mixed", {}, 1)
     org = _org()
@@ -121,8 +121,9 @@ def test_all_example_sweeps_plan():
 
 
 def test_cli_mock_run(tmp_path, capsys):
-    code = main(["--results", str(tmp_path), "run", "--org", str(CONFIG_DIR / "orgs" / "corporate-5tier.yaml"),
-                 "--task", "qa:kind=aggregate,n=4", "--mock", "--model", "worker=haiku", "--effort", "ceo=high"])
+    code = main(["--results", str(tmp_path), "run", "--org", str(CONFIG_DIR / "orgs" / "grande-armee.yaml"),
+                 "--task", "qa:kind=aggregate,n=4", "--mock", "--model", "mousquetaire=haiku",
+                 "--effort", "connétable=high"])
     out = capsys.readouterr().out
     assert code == 0
-    assert "worker=haiku" in out and "worker-2.2.2.2" in out
+    assert "mousquetaire=haiku" in out and "mousquetaire-2.2.2.2" in out

@@ -10,12 +10,15 @@ outside the delegate/report chain (`communication`).
 
 from __future__ import annotations
 
+import re
 from collections import Counter
 from pathlib import Path
 from typing import Any, Iterator, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
+
+from .ranks import SOLO_RANK, WORKER_RANK, management_ranks
 
 Effort = Literal["low", "medium", "high", "xhigh", "max"]
 Audience = Literal["all", "managers", "workers"]
@@ -24,6 +27,12 @@ Audience = Literal["all", "managers", "workers"]
 # so high-effort positions need room. The run budget can clamp these further.
 DEFAULT_MAX_TOKENS = {None: 12000, "low": 4000, "medium": 8000, "high": 16000, "xhigh": 24000, "max": 32000}
 SETTING_FIELDS = ("role", "model", "effort", "max_turns", "max_tokens", "can_do_work", "review_tools", "prompt")
+
+
+def auto_name(role: str, path: str) -> str:
+    """Default position name: the title for the top position, else '<title>-<path>' (e.g. capitaine-1.2)."""
+    slug = re.sub(r"\s+", "-", role.strip())
+    return slug if not path else f"{slug}-{path}"
 
 
 class NodeSettings(BaseModel):
@@ -199,7 +208,7 @@ class OrgConfig(BaseModel):
         if self.levels is not None:
             def make_level(i: int, parent: Node | None, path: str) -> Node:
                 lvl = self.levels[i]
-                name = lvl.role if i == 0 else f"{lvl.role}-{path}"
+                name = auto_name(lvl.role, path)
                 node = Node(name, i, path, lvl.settings(), parent)
                 if i < len(self.levels) - 1:
                     for k in range(lvl.span):
@@ -208,7 +217,7 @@ class OrgConfig(BaseModel):
             return make_level(0, None, "")
 
         def make_tree(t: TreeNode, depth: int, parent: Node | None, path: str) -> Node:
-            name = t.name or (t.role if depth == 0 else f"{t.role}-{path}")
+            name = t.name or auto_name(t.role, path)
             node = Node(name, depth, path, t.settings(), parent)
             for k, c in enumerate(t.children):
                 node.children.append(make_tree(c, depth + 1, node, f"{path}.{k + 1}" if path else str(k + 1)))
@@ -309,7 +318,7 @@ class OrgConfig(BaseModel):
                 return False
             if any(n.settings != first.settings for n in layer):
                 return False
-            if any(n.name != (n.role if i == 0 else f"{n.role}-{n.path}") for n in layer):
+            if any(n.name != auto_name(n.role, n.path) for n in layer):
                 return False
         roles = [layer[0].role for layer in self.layers]
         return len(set(roles)) == len(roles)
@@ -320,8 +329,7 @@ class OrgConfig(BaseModel):
         def dump(n: Node) -> dict:
             d = n.settings.model_dump(exclude_defaults=True)
             d["role"], d["model"] = n.role, n.settings.model
-            auto = n.role if n.depth == 0 else f"{n.role}-{n.path}"
-            if n.name != auto:
+            if n.name != auto_name(n.role, n.path):
                 d["name"] = n.name
             if n.children:
                 d["children"] = [dump(c) for c in n.children]
@@ -484,7 +492,7 @@ class GenerateSpec(BaseModel):
             top = self.ladder[0]
             orgs.append(OrgConfig(
                 name=f"{self.name}-solo",
-                levels=[LevelSpec(role=top.role or "solo", model=top.model, effort=top.effort,
+                levels=[LevelSpec(role=top.role or SOLO_RANK, model=top.model, effort=top.effort,
                                   max_tokens=top.max_tokens, max_turns=top.max_turns, prompt=top.prompt)],
             ))
         for d in self.depths:
@@ -496,14 +504,15 @@ class GenerateSpec(BaseModel):
             else:
                 tiers = [self.ladder[0]] + [self.ladder[-1]] * (d - 1)
             levels = []
+            ranks = management_ranks(d)
             for i, (tpl, span) in enumerate(zip(tiers, spans)):
-                role = tpl.role or ("lead" if i == 0 else f"manager-l{i}")
+                role = tpl.role or ranks[i]
                 if any(lv.role == role for lv in levels):
-                    role = f"{role}-l{i}"
+                    role = ranks[i] if not any(lv.role == ranks[i] for lv in levels) else f"{role}-{i}"
                 levels.append(LevelSpec(role=role, model=tpl.model, effort=tpl.effort, span=span,
                                         max_tokens=tpl.max_tokens, max_turns=tpl.max_turns, prompt=tpl.prompt))
             w = self.worker
-            levels.append(LevelSpec(role=w.role or "worker", model=w.model, effort=w.effort,
+            levels.append(LevelSpec(role=w.role or WORKER_RANK, model=w.model, effort=w.effort,
                                     max_tokens=w.max_tokens, max_turns=w.max_turns, prompt=w.prompt))
             orgs.append(OrgConfig.model_validate({
                 "name": f"{self.name}-d{d}",

@@ -13,7 +13,6 @@ from .prompts import assignment_message, question_message, system_prompt
 from .providers import ProviderError, ToolCall, ToolResult, ToolSpec
 from .rules import KIND_LABELS, relation, skipped_managers
 from .sandbox import run_python, truncate
-from .tasks.base import tokenize
 
 if TYPE_CHECKING:
     from .agents import Agent
@@ -289,52 +288,49 @@ class Toolbox:
             if inst.id == wiki_id:
                 if write and not can_write:
                     raise ToolError(f"you can read but not write {wiki_id}")
-                return inst, self.ctx.wiki_pages.setdefault(wiki_id, {})
+                return inst
         raise ToolError(f"no access to wiki {wiki_id}")
 
     async def _t_wiki_read(self, agent, args) -> str:
-        inst, pages = self._wiki(agent, args["wiki"])
-        page = (args.get("page") or "").strip()
-        if not page:
+        inst = self._wiki(agent, args["wiki"])
+        store = self.ctx.wiki
+        title = (args.get("page") or "").strip()
+        if not title:
             self.ctx.event(agent, "wiki_read", {"wiki": inst.id, "page": None})
+            pages = list(store.pages.get(inst.id, {}).values())
             if not pages:
                 return f"{inst.id} has no pages yet."
             return f"Pages in {inst.id}:\n" + "\n".join(
-                f"- {title} (by {p['author']}, v{p['version']}, {len(p['content'])} chars)" for title, p in pages.items())
-        p = pages.get(page) or next((v for k, v in pages.items() if k.lower() == page.lower()), None)
-        if p is None:
-            raise ToolError(f"no page {page!r} in {inst.id}; call wiki_read without a page to list pages")
-        self.ctx.event(agent, "wiki_read", {"wiki": inst.id, "page": page})
-        return f"# {page} (v{p['version']}, last edited by {p['author']})\n\n{truncate(p['content'], MAX_READ)}"
+                f"- {p.title} ({p.byline()}; {len(p.content)} chars)" for p in pages)
+        page = store.find(inst.id, title)
+        if page is None:
+            raise ToolError(f"no page {title!r} in {inst.id}; call wiki_read without a page to list pages")
+        self.ctx.event(agent, "wiki_read", {"wiki": inst.id, "page": page.title})
+        people = ", ".join(f"{a} ({role})" for a, role, _ in page.contributors())
+        return f"# {page.title} ({page.byline()})\nContributors: {people}\n\n{truncate(page.content, MAX_READ)}"
 
     async def _t_wiki_search(self, agent, args) -> str:
-        inst, pages = self._wiki(agent, args["wiki"])
-        terms = set(tokenize(args["query"]))
-        scored = []
-        for title, p in pages.items():
-            words = tokenize(title + " " + p["content"])
-            score = sum(words.count(t) for t in terms)
-            if score:
-                scored.append((score, title, p))
-        scored.sort(key=lambda x: (-x[0], x[1]))
+        inst = self._wiki(agent, args["wiki"])
+        hits = self.ctx.wiki.search(inst.id, args["query"])
         self.ctx.event(agent, "wiki_read", {"wiki": inst.id, "query": args["query"][:100]})
-        if not scored:
+        if not hits:
             return "No matching pages."
-        return "\n".join(f"- {t}: {p['content'][:160]}..." for _, t, p in scored[:8])
+        return "\n".join(f"- {p.title} ({p.current.author}, {p.current.role}): {p.content[:160]}..." for p in hits[:8])
 
     async def _t_wiki_write(self, agent, args) -> str:
-        inst, pages = self._wiki(agent, args["wiki"], write=True)
-        page = args["page"].strip()[:120]
-        content = args["content"]
-        existing = pages.get(page)
-        if args.get("append") and existing:
-            content = existing["content"] + "\n\n" + content
-        if len(content) > MAX_WIKI_PAGE:
-            raise ToolError(f"page too long ({len(content)} chars; limit {MAX_WIKI_PAGE})")
-        pages[page] = {"content": content, "author": agent.name, "version": (existing or {}).get("version", 0) + 1}
-        self.ctx.event(agent, "wiki_write", {"wiki": inst.id, "page": page, "chars": len(content),
-                                             "preview": args["content"][:200]})
-        return f"Saved {inst.id} / {page} (v{pages[page]['version']})."
+        inst = self._wiki(agent, args["wiki"], write=True)
+        store = self.ctx.wiki
+        existing = store.find(inst.id, args["page"])
+        new_len = len(args["content"]) + (len(existing.content) + 2 if existing and args.get("append") else 0)
+        if new_len > MAX_WIKI_PAGE:
+            raise ToolError(f"page too long ({new_len} chars; limit {MAX_WIKI_PAGE})")
+        rev = store.write(inst.id, args["page"], args["content"], author=agent.name, role=agent.spec.role,
+                          level=agent.level, model=agent.model.alias, append=bool(args.get("append")))
+        title = store.find(inst.id, args["page"]).title
+        self.ctx.event(agent, "wiki_write", {"wiki": inst.id, "page": title, "version": rev.version, "mode": rev.mode,
+                                             "role": agent.spec.role, "chars": len(rev.content),
+                                             "delta": rev.chars_delta, "preview": args["content"][:200]})
+        return f"Saved {inst.id} / {title} (v{rev.version})."
 
     # ---- workspace ----
     def _path(self, rel: str) -> Path:

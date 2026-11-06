@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "orgbench"
+name = "swarmy"
 version = "0.1.0"
 description = "Testbench for comparing organizational hierarchies of LLM agent swarms"
 readme = "README.md"
@@ -20,13 +20,13 @@ dependencies = [
 dev = ["pytest>=8"]
 
 [project.scripts]
-orgbench = "orgbench.cli:main"
+swarmy = "swarmy.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["orgbench*"]
+include = ["swarmy*"]
 
 [tool.setuptools.package-data]
-"orgbench.ui" = ["static/*"]
+"swarmy.ui" = ["static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

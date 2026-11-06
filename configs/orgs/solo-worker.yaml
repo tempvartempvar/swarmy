@@ -1,5 +1,5 @@
-# Baseline: a single cheap worker model, no management at all.
+# Baseline: a lone franc-tireur on a cheap model, no chain of command.
 name: solo-worker
 levels:
-  - role: solo
+  - role: franc-tireur
     model: gpt-oss-120b

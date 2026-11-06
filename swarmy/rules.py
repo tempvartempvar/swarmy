@@ -99,8 +99,8 @@ class WikiInstance:
         if self.spec.scope == "org":
             return "whole organization"
         if self.spec.scope == "team":
-            return f"team of {self.owner}"
-        return f"department under {self.owner}"
+            return f"unit led by {self.owner}"
+        return f"division under {self.owner}"
 
 
 def _audience(nodes: list[Node], who: str) -> set[str]:

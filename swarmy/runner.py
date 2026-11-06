@@ -21,6 +21,7 @@ from .providers import FatalProviderError, ProviderRegistry, StepResult
 from .tasks import TaskInstance
 from .tools import Toolbox
 from .tracing import Tracer, Transcript, new_id
+from .wiki import WikiStore
 
 
 @dataclass
@@ -37,7 +38,7 @@ class RunContext:
     listener: Callable[[dict], None] | None = None  # live UI hook
     agents: dict[str, Agent] = field(default_factory=dict)
     wikis: list[WikiInstance] = field(default_factory=list)
-    wiki_pages: dict[str, dict] = field(default_factory=dict)
+    wiki: WikiStore = None  # type: ignore[assignment]
     inboxes: dict[str, list[str]] = field(default_factory=lambda: defaultdict(list))
     messages_sent: Counter = field(default_factory=Counter)
     active: set[str] = field(default_factory=set)
@@ -50,12 +51,13 @@ class RunContext:
     def bind(self, root: Agent) -> None:
         self.agents = {a.name: a for a in root.walk()}
         self.wikis = wiki_instances(self.org)
+        self.wiki = WikiStore(self.wikis)
         for a in root.walk():
             self._contacts[a.name] = {b.name: k for b, k in contacts(self.org, a.node)}
         for inst in self.wikis:
-            pages = self.wiki_pages.setdefault(inst.id, {})
             if inst.spec.publish_brief:
-                pages["Client brief"] = {"content": self.task.brief, "author": "client", "version": 1}
+                self.wiki.write(inst.id, "Client brief", self.task.brief, author="client", role="client",
+                                level=None, model=None)
 
     def wiki_access(self, agent: Agent) -> list[tuple[WikiInstance, bool]]:
         return wikis_for(self.wikis, agent.name)
@@ -111,6 +113,7 @@ async def run_one(
     sweep_id: str | None = None,
     rep: int = 0,
     listener: Callable[[dict], None] | None = None,
+    on_start: Callable[[RunContext], None] | None = None,
 ) -> dict:
     run_id = new_id("run")
     run_dir = results_dir / "runs" / run_id
@@ -122,6 +125,8 @@ async def run_one(
                      budget=RunBudget(run_cap), tracer=tracer, transcript=transcript, listener=listener)
     ctx.tools = Toolbox(ctx)
     ctx.bind(root)
+    if on_start:
+        on_start(ctx)
 
     started, t0 = time.time(), time.monotonic()
     status, error, submission, fatal = "completed", None, None, None
@@ -147,7 +152,7 @@ async def run_one(
     undelivered = {k: len(v) for k, v in ctx.inboxes.items() if v}
     if undelivered:
         ctx.event(root, "undelivered", {"by_node": undelivered, "count": sum(undelivered.values())})
-    _save_wikis(ctx, run_dir / "wikis")
+    ctx.wiki.save(run_dir / "wikis")
     transcript.write(node="-", kind="result", status=status, answer=answer, score=grade.score, error=error)
     transcript.close()
 
@@ -182,13 +187,3 @@ async def run_one(
                   "t": time.time()})
     return summary
 
-
-def _save_wikis(ctx: RunContext, out: Path) -> None:
-    for wiki_id, pages in ctx.wiki_pages.items():
-        if not pages:
-            continue
-        d = out / wiki_id.replace("/", "__")
-        d.mkdir(parents=True, exist_ok=True)
-        for i, (title, p) in enumerate(pages.items()):
-            safe = "".join(ch if ch.isalnum() or ch in "-_ " else "_" for ch in title)[:80] or f"page{i}"
-            (d / f"{safe}.md").write_text(f"<!-- v{p['version']} by {p['author']} -->\n# {title}\n\n{p['content']}\n")

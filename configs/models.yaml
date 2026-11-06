@@ -5,7 +5,7 @@
 #   model: anthropic:claude-sonnet-5-5        (price copied from the matching entry below)
 #
 # Prices are USD per million tokens. Anthropic list prices as of 2026-10; OpenRouter prices
-# were snapshotted on 2026-11-03 - run `orgbench models check` to compare against live prices.
+# were snapshotted on 2026-11-03 - run `swarmy models check` to compare against live prices.
 # OpenRouter responses report the real charge, which is what gets logged; these prices are
 # used for the per-call budget guard.
 #

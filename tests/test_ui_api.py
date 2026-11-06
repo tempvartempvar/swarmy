@@ -8,8 +8,8 @@ import urllib.request
 
 import pytest
 
-from orgbench.paths import CONFIG_DIR
-from orgbench.ui.server import serve
+from swarmy.paths import CONFIG_DIR
+from swarmy.ui.server import serve
 
 
 @pytest.fixture
@@ -38,7 +38,7 @@ def server(tmp_path, monkeypatch):
 def test_static_and_catalog(server):
     call, base, _ = server
     with urllib.request.urlopen(base + "/") as r:
-        assert b"org designer" in r.read()
+        assert b"order of battle" in r.read()
     with urllib.request.urlopen(base + "/static/app.js") as r:
         assert r.headers["content-type"].startswith("text/javascript") or "javascript" in r.headers["content-type"]
     status, cat = call("/api/catalog")
@@ -47,18 +47,18 @@ def test_static_and_catalog(server):
 
 def test_load_analyze_edit_save(server):
     call, _, orgs = server
-    status, data = call("/api/orgs/two-tier")
+    status, data = call("/api/orgs/regiment")
     assert status == 200
     cfg = data["config"]
     assert "tree" in cfg and data["analysis"]["metrics"]["shape"] == "1-2-6"
     # per-position edit: one manager gets an extra report on a different model
-    cfg["tree"]["children"][0]["children"].append({"role": "worker", "model": "haiku"})
+    cfg["tree"]["children"][0]["children"].append({"role": "mousquetaire", "model": "haiku"})
     cfg["knowledge"] = {"wikis": [{"name": "handbook", "scope": "org", "publish_brief": True}]}
     cfg["communication"] = {"peers": True, "skip_up": 1}
     status, a = call("/api/analyze", {"config": cfg})
     assert status == 200 and a["ok"], a
     assert a["metrics"]["shape"] == "1-2-7" and not a["metrics"]["uniform"]
-    assert {c["kind"] for c in a["contacts"]["worker-1.4"]} == {"peer", "skip_up"}
+    assert {c["kind"] for c in a["contacts"]["mousquetaire-1.4"]} == {"peer", "skip_up"}
     assert a["wikis"][0]["id"] == "handbook" and len(a["wikis"][0]["members"]) == 10
     status, saved = call("/api/orgs/edited", {"config": cfg})
     assert status == 200 and saved["form"] == "tree"
@@ -76,16 +76,17 @@ def test_invalid_config_reports_error(server):
 def test_generate_and_yaml_roundtrip(server):
     call, _, _ = server
     status, g = call("/api/generate", {"name": "g", "workers": 8, "depth": 3,
-                                        "ladder": [{"role": "lead", "model": "sonnet"}, {"role": "manager", "model": "haiku"}],
-                                        "worker": {"role": "worker", "model": "gpt-oss-120b"}})
+                                        "ladder": [{"model": "sonnet"}, {"model": "haiku"}],
+                                        "worker": {"model": "gpt-oss-120b"}})
     assert status == 200 and g["analysis"]["metrics"]["shape"] == "1-2-4-8"
+    assert g["analysis"]["layers"] == ["maréchal", "colonel", "capitaine", "mousquetaire"]
     status, y = call("/api/yaml", {"yaml": g["analysis"]["yaml"]})
     assert status == 200 and y["analysis"]["metrics"]["shape"] == "1-2-4-8"
 
 
 def test_mock_run_with_live_state(server):
     call, _, _ = server
-    _, data = call("/api/orgs/team-board")
+    _, data = call("/api/orgs/regiment-mess")
     status, started = call("/api/runs", {"config": data["config"], "task": "code:n=4,coupling=0", "mock": True,
                                          "budget": 0.2})
     assert status == 200
@@ -105,3 +106,25 @@ def test_real_run_requires_confirmation(server):
     _, data = call("/api/orgs/solo-haiku")
     status, err = call("/api/runs", {"config": data["config"], "mock": False})
     assert status == 400 and "confirm" in err["error"]
+
+
+def test_wiki_endpoints_live_and_archive(server):
+    call, _, _ = server
+    _, data = call("/api/orgs/etat-major")
+    _, started = call("/api/runs", {"config": data["config"], "task": "mixed:products=3,cities=2", "mock": True,
+                                    "budget": 0.2})
+    for _ in range(100):
+        _, st = call(f"/api/runs/{started['run']}?since=0")
+        if st["status"] != "running":
+            break
+        time.sleep(0.1)
+    status, live = call(f"/api/runs/{started['run']}/wikis")
+    assert status == 200 and {i["id"] for i in live["instances"]} >= {"ordres", "carnet/colonel-du-genie"}
+    page = next(p for i in live["instances"] if i["id"] == "ordres" for p in i["pages"] if p["title"] == "Plan")
+    assert page["revisions"][0]["role"] == "maréchal"
+    status, archive = call("/api/archive")
+    assert status == 200 and archive[0]["run_id"] == st["run_id"] and archive[0]["pages"] >= 3
+    status, saved = call(f"/api/archive/{st['run_id']}/wikis")
+    assert status == 200 and saved["org"] == "etat-major"
+    status, _ = call("/api/archive/../../etc/wikis")
+    assert status in (400, 404)

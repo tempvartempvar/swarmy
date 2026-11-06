@@ -3,13 +3,13 @@ import json
 
 import pytest
 
-from orgbench.catalog import Catalog
-from orgbench.config import LevelSpec, OrgConfig
-from orgbench.providers import ProviderRegistry
-from orgbench.providers.base import FatalProviderError
-from orgbench.runner import run_one
-from orgbench.tasks import make_task
-from orgbench.tracing import Tracer
+from swarmy.catalog import Catalog
+from swarmy.config import LevelSpec, OrgConfig
+from swarmy.providers import ProviderRegistry
+from swarmy.providers.base import FatalProviderError
+from swarmy.runner import run_one
+from swarmy.tasks import make_task
+from swarmy.tracing import Tracer
 
 from .stub_servers import (
     anthropic_stub,
@@ -87,7 +87,7 @@ def test_openrouter_request_shape_retry_and_reported_cost(local_env, monkeypatch
         async def no_sleep(_):
             return None
 
-        monkeypatch.setattr("orgbench.providers.base.asyncio.sleep", no_sleep)
+        monkeypatch.setattr("swarmy.providers.base.asyncio.sleep", no_sleep)
         catalog = Catalog.load(offline=True)
         tracer = Tracer(tmp_path / "db.sqlite")
 

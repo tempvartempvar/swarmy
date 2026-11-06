@@ -2,8 +2,8 @@ import asyncio
 
 import pytest
 
-from orgbench.budget import MIN_OUTPUT, RunBudget, RunBudgetExceeded, SweepBudget
-from orgbench.catalog import Catalog
+from swarmy.budget import MIN_OUTPUT, RunBudget, RunBudgetExceeded, SweepBudget
+from swarmy.catalog import Catalog
 
 
 def test_run_budget_clamps_then_stops():

@@ -82,7 +82,7 @@ class OpenRouterProvider(Provider):
             timeout=httpx.Timeout(600, connect=30),
             headers={
                 "Authorization": f"Bearer {key}",
-                "X-Title": "orgbench",
+                "X-Title": "swarmy",
             },
         )
         self.retry = retry or RetryPolicy()

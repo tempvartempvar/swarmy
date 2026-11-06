@@ -55,7 +55,7 @@ def truncate(text: str, limit: int = MAX_OUTPUT) -> str:
 
 async def run_python(code: str, workspace: Path, timeout: float = 20) -> str:
     """Run a snippet with the workspace as cwd and on sys.path. Returns combined output."""
-    with tempfile.TemporaryDirectory(prefix="orgbench-run-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="swarmy-run-") as tmp:
         script = Path(tmp) / f"snippet_{uuid.uuid4().hex[:8]}.py"
         script.write_text(code)
         proc = await asyncio.create_subprocess_exec(
