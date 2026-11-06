@@ -29,6 +29,8 @@ class Agent:
         self.specs: dict = {}
         self.current_order: int | None = None  # id of the order being worked on
         self.current_order_text: str = ""  # its text (used to stop verbatim forwarding)
+        self.wiki_writes = 0  # wiki edits during the current assignment
+        self.reminded = False
 
     def max_turns(self, org: OrgConfig) -> int:
         if self.spec.max_turns:
@@ -50,6 +52,7 @@ class Agent:
         """Work on one assignment until `submit` (or a limit). Returns {report, answer, status}."""
         self.current_order = order_id
         self.current_order_text = text
+        self.wiki_writes, self.reminded = 0, False
         ctx.active.add(self.name)
         ctx.live(self, "working", {})
         try:
@@ -121,6 +124,14 @@ class Agent:
                     problem = validate_args(self.specs["submit"], call.arguments)
                     if problem:
                         outputs[call.id] = ToolResult(call.id, f"Submission rejected: {problem}", True)
+                    elif self._should_remind(ctx):
+                        self.reminded = True
+                        ctx.event(self, "wiki_reminder", {})
+                        writable = [w.id for w, can in ctx.wiki_access(self) if can]
+                        outputs[call.id] = ToolResult(
+                            call.id, "Not submitted yet. Your report only reaches your commander. If your work produced "
+                            "facts, decisions, interfaces or results that others need, record them on the right "
+                            f"topic page first ({', '.join(writable)}). Then call submit again; it will be accepted.")
                     else:
                         submission = call.arguments
                         outputs[call.id] = ToolResult(call.id, "Submitted.")
@@ -138,6 +149,12 @@ class Agent:
 
         ctx.event(self, "turn_limit", {})
         return {"report": f"[turn limit reached] {last_text}", "answer": None, "status": "turn_limit"}
+
+
+    def _should_remind(self, ctx: "RunContext") -> bool:
+        if self.reminded or self.wiki_writes or not ctx.org.knowledge.remind_before_submit:
+            return False
+        return any(can for _, can in ctx.wiki_access(self))
 
 
 def _clip(args: dict, n: int = 1500) -> dict:

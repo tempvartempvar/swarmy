@@ -244,15 +244,24 @@ def cmd_wiki(args) -> int:
     results, _ = _paths(args)
     runs_dir = results / "runs"
     if args.run in (None, "latest"):
-        found = sorted(runs_dir.glob("run_*/wikis/wikis.json"), key=lambda f: f.stat().st_mtime)
+        found = sorted(runs_dir.glob("run_*/result.json"), key=lambda f: f.stat().st_mtime)
         if not found:
-            raise SystemExit(f"no runs with wiki pages under {runs_dir}")
-        run_dir = found[-1].parent.parent
+            raise SystemExit(f"no runs under {runs_dir}")
+        run_dir = found[-1].parent
     else:
         run_dir = runs_dir / args.run
     data = load(run_dir)
     if data is None:
-        raise SystemExit(f"{run_dir.name} has no wiki pages")
+        from .tracing import Tracer
+        from .wiki import activity
+
+        _, db = _paths(args)
+        act = activity(Tracer(db), run_dir.name)
+        print(f"{run_dir.name} has no wiki pages. Wiki activity: {act['reads']} reads, {act['writes']} writes, "
+              f"{len(act['failed'])} failed calls, {act['reminders']} submit reminders.")
+        for f in act["failed"][:10]:
+            print(f"  {f['node']}: {f['tool']} failed: {f['error']}")
+        return 1
     print(f"run {run_dir.name}\n")
     for inst in data["instances"]:
         if args.wiki and inst["id"] != args.wiki:
@@ -348,7 +357,7 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(fn=cmd_orders)
 
     p = sub.add_parser("wiki", help="browse the wikis a run produced, with who edited what")
-    p.add_argument("run", nargs="?", default="latest", help="run id (default: latest run with wiki pages)")
+    p.add_argument("run", nargs="?", default="latest", help="run id (default: the latest run)")
     p.add_argument("--wiki", help="only this wiki instance, e.g. unit-log/captain-1")
     p.add_argument("--page", help="print this page with its revision history")
     p.set_defaults(fn=cmd_wiki)

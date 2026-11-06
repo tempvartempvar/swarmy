@@ -1207,6 +1207,20 @@ function renderWikiBrowser() {
   }
   if (!navItems.length) navItems.push(h("p", { class: "muted" }, wb.role ? "No pages edited by that rank." : "No wiki pages in this run."));
   nav.replaceChildren(...navItems);
+  if (!insts.some((i) => i.pages.length)) {
+    const a = data.activity || { reads: 0, writes: 0, failed: [], reminders: 0 };
+    const configured = data.configured || insts.map((i) => i.name);
+    main.replaceChildren(...[
+      h("h2", { style: "margin:0 0 6px" }, "No wiki pages were written"),
+      configured.length ? h("p", {}, `This org has ${configured.length} wiki${configured.length > 1 ? "s" : ""} (${[...new Set(configured)].join(", ")}), but no agent saved a page.`)
+        : h("p", {}, "This org has no wikis. Add one in the Wikis tab of the designer."),
+      h("p", {}, `Wiki activity: ${a.reads} read${a.reads === 1 ? "" : "s"}, ${a.writes} write${a.writes === 1 ? "" : "s"}, ${a.failed.length} failed call${a.failed.length === 1 ? "" : "s"}, ${a.reminders} submit reminder${a.reminders === 1 ? "" : "s"}.`),
+      a.failed.length ? h("div", {}, h("h3", {}, "Failed wiki calls"),
+        h("ul", {}, a.failed.slice(0, 20).map((f) => h("li", { class: "small" }, h("strong", {}, f.node), `: ${f.tool}: ${f.error}`)))) : null,
+      h("p", { class: "small muted" }, "Runs from before this version didn't log rejected calls, and didn't remind agents to record findings before reporting. Start a new run to see both."),
+    ].filter(Boolean));
+    return;
+  }
 
   const inst = insts.find((i) => i.id === wb.inst);
   const page = inst && inst.pages.find((p) => p.title === wb.page);

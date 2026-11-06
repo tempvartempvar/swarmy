@@ -133,9 +133,9 @@ def tool_specs(agent: "Agent", ctx: "RunContext") -> list[ToolSpec]:
                 _obj({"wiki": {"type": "string", "enum": writable},
                       "page": {"type": "string", "description": "topic title, e.g. 'Zone facts' or 'Interfaces'"},
                       "content": {"type": "string", "description": "the full page (Markdown)"},
-                      "summary": {"type": "string", "description": "edit summary: what changed and why"},
+                      "summary": {"type": "string", "description": "edit summary: what changed and why (recommended)"},
                       "append": {"type": "boolean"}},
-                     ["wiki", "page", "content", "summary"])))
+                     ["wiki", "page", "content"])))
 
     contacts = ctx.contacts_of(agent)
     if contacts:
@@ -186,15 +186,20 @@ class Toolbox:
         self.ctx = ctx
         self.ws = ctx.workspace.resolve()
 
+    def _reject(self, agent: "Agent", call: ToolCall, message: str) -> ToolResult:
+        # every failed call is logged, so the activity feed and diagnostics can show it
+        self.ctx.event(agent, "tool", {"name": call.name, "ok": False, "error": message[:300]})
+        return ToolResult(call.id, message, True)
+
     async def execute(self, agent: "Agent", call: ToolCall, specs: dict[str, ToolSpec]) -> ToolResult:
         if call.error:
-            return ToolResult(call.id, f"Tool call rejected: {call.error}", True)
+            return self._reject(agent, call, f"Tool call rejected: {call.error}")
         spec = specs.get(call.name)
         if spec is None:
-            return ToolResult(call.id, f"Unknown tool '{call.name}'. Available: {', '.join(specs)}", True)
+            return self._reject(agent, call, f"Unknown tool '{call.name}'. Available: {', '.join(specs)}")
         problem = validate_args(spec, call.arguments)
         if problem:
-            return ToolResult(call.id, f"Invalid arguments for {call.name}: {problem}", True)
+            return self._reject(agent, call, f"Invalid arguments for {call.name}: {problem}")
         try:
             handler = getattr(self, f"_t_{call.name}")
             out = await handler(agent, call.arguments)
@@ -420,6 +425,7 @@ class Toolbox:
                                 "knowledge (facts, decisions, interfaces, results), not orders.")
         if existing and not args.get("append") and existing.content.strip() == args["content"].strip():
             return f"No change: {inst.id} / {existing.title} already has this content."
+        agent.wiki_writes += 1
         rev = store.write(inst.id, args["page"], args["content"], author=agent.name, role=agent.spec.role,
                           level=agent.level, model=agent.model.alias, append=bool(args.get("append")),
                           summary=str(args.get("summary") or ""))

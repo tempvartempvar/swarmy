@@ -268,6 +268,11 @@ reach. Wikis are meant to be a curated knowledge base, not a log:
 - `wiki_write` replaces the page with an improved version unless `append` is set (for log pages).
 - Every edit needs an **edit summary**, and edits that change nothing are skipped.
 - Pasting orders into a page is rejected.
+- Before accepting a report from an agent that can write to a wiki but hasn't during its assignment,
+  swarmy reminds it once to record what others need. It can then submit straight away. Turn this off
+  with `knowledge: {remind_before_submit: false}`.
+- If a run ends with no pages, the explorer's Wikis tab and `swarmy wiki` show the wiki activity
+  instead: reads, writes, and every rejected call with its reason.
 
 Every page an agent reads shows who last edited it, the last edit summary, and all contributors with
 their ranks.

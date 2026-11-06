@@ -66,10 +66,10 @@ def test_free_format_and_forwarding_toggle(tmp_path):
     assert order.startswith("GreenLoop") and fields == {}
 
 
-def test_wiki_edit_needs_summary_and_rejects_pasted_orders(tmp_path):
+def test_wiki_edits_and_pasted_orders(tmp_path):
     ctx, root = _ctx(tmp_path)
-    r = _call(ctx, root, "wiki_write", {"wiki": "orders", "page": "Facts", "content": "Pump: 10 l/min"})
-    assert r.is_error and "summary" in r.content
+    r = _call(ctx, root, "wiki_write", {"wiki": "orders", "page": "Draft", "content": "Pump: 10 l/min"})
+    assert not r.is_error and ctx.wiki.find("orders", "Draft").current.summary == ""  # summary optional
     r = _call(ctx, root, "wiki_write", {"wiki": "orders", "page": "Brief", "summary": "copy",
                                         "content": ctx.task.brief[:1200]})
     assert r.is_error and "distilled" in r.content
@@ -106,3 +106,35 @@ def test_mock_runs_comply_with_rules(tmp_path, fmt):
     t = Tracer(tmp_path / "db.sqlite")
     assert len(t.query("SELECT 1 FROM events WHERE kind='assign'")) == 2
     assert not t.query("SELECT 1 FROM events WHERE kind='tool' AND data_json LIKE '%\"ok\": false%'")
+
+
+def test_failed_calls_are_logged_and_diagnosed(tmp_path):
+    from swarmy.wiki import activity
+
+    ctx, root = _ctx(tmp_path)
+    r = _call(ctx, root, "wiki_write", {"wiki": "orders", "content": "no page title"})
+    assert r.is_error
+    act = activity(ctx.tracer, "r")
+    assert act["writes"] == 0 and act["failed"] and "missing required argument 'page'" in act["failed"][0]["error"]
+
+
+def test_submit_reminder_once(tmp_path):
+    """An agent that can write a wiki but hasn't is reminded once, then its report is accepted."""
+    from swarmy.providers import StepResult, Usage
+    from swarmy.providers.mock_provider import MockProvider
+
+    calls = []
+
+    class Submitter(MockProvider):
+        async def step(self, conv, spec, *, max_tokens, effort, tool_choice=None):
+            calls.append(1)
+            call = ToolCall(f"s{len(calls)}", "submit", {"report": "done"})
+            conv.events.append(("assistant", [call]))
+            return StepResult(text="", tool_calls=[call], usage=Usage(), stop_reason="tool_use", latency_s=0)
+
+    ctx, root = _ctx(tmp_path)
+    ctx.registry._providers["mock"] = Submitter()
+    private = ctx.agents["private-1"]
+    rep = asyncio.run(private.handle("Orders from captain: find the pump flow.", ctx, order_id=1))
+    assert rep["status"] == "submitted" and len(calls) == 2
+    assert ctx.tracer.query("SELECT 1 FROM events WHERE kind='wiki_reminder'")

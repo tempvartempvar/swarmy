@@ -90,6 +90,9 @@ class WikiSpec(BaseModel):
 class Knowledge(BaseModel):
     model_config = ConfigDict(extra="forbid")
     wikis: list[WikiSpec] = []
+    # Before accepting a report from an agent that can write to a wiki but hasn't during this
+    # assignment, remind it once to record what others need. It can still submit straight away.
+    remind_before_submit: bool = True
 
 
 class CommunicationRules(BaseModel):

@@ -172,3 +172,21 @@ def render_markdown(inst: dict, page: dict) -> str:
 def load(run_dir: Path) -> dict | None:
     f = run_dir / "wikis" / "wikis.json"
     return json.loads(f.read_text()) if f.exists() else None
+
+
+def activity(tracer, run_id: str) -> dict:
+    """How the run used its wikis: tool calls by type, failures with reasons, reminders."""
+    rows = tracer.query("SELECT node, kind, data_json FROM events WHERE run_id=? AND kind IN "
+                        "('tool', 'wiki_write', 'wiki_read', 'wiki_reminder') ORDER BY id", (run_id,))
+    out = {"reads": 0, "writes": 0, "failed": [], "reminders": 0}
+    for r in rows:
+        d = json.loads(r["data_json"] or "{}")
+        if r["kind"] == "wiki_read":
+            out["reads"] += 1
+        elif r["kind"] == "wiki_write":
+            out["writes"] += 1
+        elif r["kind"] == "wiki_reminder":
+            out["reminders"] += 1
+        elif str(d.get("name", "")).startswith("wiki") and not d.get("ok", True):
+            out["failed"].append({"node": r["node"], "tool": d.get("name"), "error": d.get("error")})
+    return out

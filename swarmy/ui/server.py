@@ -327,15 +327,25 @@ class UIState:
             tracer.close()
 
     def explorer_wikis(self, run_id: str) -> dict:
-        from ..wiki import load
+        from ..tracing import Tracer
+        from ..wiki import activity, load
 
         run_dir = self._run_dir(run_id)
         key = self.live_ids.get(run_id)
         store = self.stores.get(key, {}).get("wiki") if key else None
-        if store is not None:
-            return {"run_id": run_id, **store.to_json()}
-        data = load(run_dir)
-        return {"run_id": run_id, **(data or {"instances": []})}
+        data = store.to_json() if store is not None else (load(run_dir) or {"instances": []})
+        tracer = Tracer(self.results_dir / "swarmy.db")
+        try:
+            data["activity"] = activity(tracer, run_id)
+            if not data["instances"]:  # finished runs with no pages don't save wikis.json
+                row = tracer.query("SELECT org_json FROM runs WHERE run_id=?", (run_id,))
+                if row:
+                    from ..config import OrgConfig
+
+                    data["configured"] = [w.name for w in OrgConfig.model_validate_json(row[0]["org_json"]).knowledge.wikis]
+        finally:
+            tracer.close()
+        return {"run_id": run_id, **data}
 
     def explorer_files(self, run_id: str) -> dict:
         ws = self._run_dir(run_id) / "workspace"

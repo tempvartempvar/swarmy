@@ -124,6 +124,12 @@ def system_prompt(agent: "Agent", ctx: "RunContext") -> str:
                      "file names). Read a page before writing, then replace it with an improved version and give an "
                      "edit summary. Don't create near-duplicate pages and never paste orders or whole documents.")
         lines.append("- Use wiki_read / wiki_search before redoing work someone may already have done.")
+        if any(can for _, can in wikis):
+            lines.append("- Your report reaches only your commander. Anything others need (facts with their sources, "
+                         "decisions, interfaces, results) belongs on the wiki: update the right topic page before "
+                         "you submit." if agent.parent else
+                         "- Record the plan, key decisions and interfaces on the wiki so every unit works from the "
+                         "same facts, and tell your subordinates which pages to read and update.")
 
     contacts = ctx.contacts_of(agent)
     if contacts:
