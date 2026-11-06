@@ -1,6 +1,6 @@
 # Flatness pilot with a realistic model mix, at a fixed 4 workers:
-#   lone Sonnet franc-tireur  vs  Sonnet capitaine -> 4 mousquetaires  vs  Sonnet colonel -> Haiku capitaines
-#   -> mousquetaires  vs  Sonnet maréchal -> Haiku colonel -> Haiku capitaines -> mousquetaires
+#   lone Sonnet  vs  Sonnet field marshal -> 4 privates  vs  Sonnet field marshal -> Haiku captains -> privates
+#   vs  Sonnet field marshal -> Haiku colonel -> Haiku captains -> privates
 # 16 runs x ~$0.31 cap = $5.
 name: pilot
 budget_usd: 5.0
@@ -12,7 +12,7 @@ orgs:
       depths: [1, 2, 3]
       include_solo: true
       ladder:
-        - {model: sonnet, effort: low}   # titles default to French ranks by depth
+        - {model: sonnet, effort: low}   # titles default to military ranks by depth
         - {model: haiku}
       worker: {model: gpt-oss-120b}
 tasks:

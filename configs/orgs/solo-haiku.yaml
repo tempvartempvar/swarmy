@@ -1,5 +1,5 @@
-# Baseline: a lone franc-tireur does everything itself, no chain of command.
+# Baseline: a lone wolf does everything itself, no chain of command.
 name: solo-haiku
 levels:
-  - role: franc-tireur
+  - role: lone-wolf
     model: haiku

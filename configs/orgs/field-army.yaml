@@ -1,0 +1,25 @@
+# The full chain of command: 31 agents, 16 of them privates doing the hands-on work.
+# Expensive: an Opus max-effort field marshal plus two Opus generals can cost $1-4 per run.
+# Try it with `swarmy run --org configs/orgs/field-army.yaml --task mixed --budget 3`,
+# or give it your own mission in the designer (swarmy ui, Manoeuvres tab).
+name: field-army
+description: Opus field marshal (max) -> Opus generals (medium) -> Sonnet colonels -> Haiku captains -> free privates
+levels:
+  - role: field-marshal
+    model: opus
+    effort: max
+    span: 2
+    goal: Deliver what the client asked for, complete and working, within budget.
+  - role: general
+    model: opus
+    effort: medium
+    span: 2
+  - role: colonel
+    model: sonnet
+    effort: medium
+    span: 2
+  - role: captain
+    model: haiku
+    span: 2
+  - role: private
+    model: gemma-free     # rate-limited; swap with --model private=gpt-oss-120b for real sweeps

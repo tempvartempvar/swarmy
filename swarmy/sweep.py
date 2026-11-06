@@ -127,7 +127,7 @@ def describe_plan(cfg: SweepConfig, runs: list[PlannedRun], catalog: Catalog, tr
             seen_settings.setdefault((n.role, n.settings.model, n.settings.output_cap()), n.settings)
         for (role, model, cap_tokens), _ in seen_settings.items():
             spec = catalog.resolve(model)
-            inp, out, _, cw = spec.price.rates(4000)
+            inp, out, _, cw = spec.rate.rates(4000)
             one_call = 4000 * max(inp, cw) + cap_tokens * out
             if one_call > cap * 0.5:
                 lines.append(f"{'':34}   ! a single {role} call can cost up to ${one_call:.3f}; the run cap "
@@ -190,7 +190,8 @@ async def run_sweep(cfg: SweepConfig, base: Path, *, catalog: Catalog, mock: boo
                                   sweep_id=sweep_id, rep=pr.rep)
                 actual = s["cost_usd"]
                 mark = "PASS" if s["passed"] else "    "
-                log(f"[{idx + 1:>3}/{len(runs)}] {mark} score={s['score']:.2f} ${actual:.4f} {s['wall_s']:6.1f}s "
+                sc = "  -  " if s["score"] is None else f"{s['score']:.2f}"
+                log(f"[{idx + 1:>3}/{len(runs)}] {mark} score={sc} ${actual:.4f} {s['wall_s']:6.1f}s "
                     f"{s['status']:<16} {pr.org.name} x {pr.task.task_id}")
                 if s.get("fatal") is not None:
                     log(f"FATAL: {s['fatal']} - stopping sweep")

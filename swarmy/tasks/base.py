@@ -18,7 +18,7 @@ from ..sandbox import sandbox_env, set_limits
 
 @dataclass
 class Grade:
-    score: float  # 0..1
+    score: float | None  # 0..1, or None for ungraded tasks (missions)
     passed: bool
     details: dict = field(default_factory=dict)
 

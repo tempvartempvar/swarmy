@@ -1,0 +1,44 @@
+# A general staff with an uneven tree, named positions, goals per position, knowledge sharing
+# and communication rules. Scouts do the research, sappers build things.
+# Open it in the designer with `swarmy ui`, or run it:
+#   swarmy run --org configs/orgs/general-staff.yaml --task mixed --budget 1
+name: general-staff
+description: Uneven staff with orders, unit logs, goals per position, and skip-level questions allowed
+tree:
+  role: field-marshal
+  model: sonnet
+  effort: medium
+  goal: Get it right first time; split work so intelligence and engineering run in parallel.
+  children:
+    - role: colonel
+      name: intelligence-colonel
+      model: haiku
+      goal: Every fact the engineers need is found, checked and written to the orders wiki.
+      children:
+        - {role: scout, model: gpt-oss-120b}
+        - {role: scout, model: gpt-oss-120b}
+        - {role: scout, model: qwen-flash}
+    - role: colonel
+      name: engineer-colonel
+      model: haiku
+      goal: Working, tested code. Nothing is reported done until the public tests pass.
+      children:
+        - {role: sapper, model: gpt-oss-120b}
+        - {role: sapper, model: haiku}
+knowledge:
+  wikis:
+    - name: orders
+      scope: org
+      write: managers
+      publish_brief: true
+      description: Orders, plans and interfaces from the staff.
+    - name: unit-log
+      scope: team
+      description: Each unit's working log.
+communication:
+  chain: true
+  peers: true
+  skip_up: 1
+  cc_skipped: true
+  modes: [ask, message]
+  max_messages: 6

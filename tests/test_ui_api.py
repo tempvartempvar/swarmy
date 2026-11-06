@@ -18,7 +18,8 @@ def server(tmp_path, monkeypatch):
         monkeypatch.delenv(var, raising=False)
     orgs = tmp_path / "orgs"
     shutil.copytree(CONFIG_DIR / "orgs", orgs)
-    httpd = serve("127.0.0.1", 0, orgs, tmp_path / "results")
+    shutil.copy(CONFIG_DIR / "models.yaml", tmp_path / "models.yaml")  # keep models.local.yaml out of the repo
+    httpd = serve("127.0.0.1", 0, orgs, tmp_path / "results", str(tmp_path / "models.yaml"))
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     base = f"http://127.0.0.1:{httpd.server_address[1]}"
 
@@ -52,13 +53,13 @@ def test_load_analyze_edit_save(server):
     cfg = data["config"]
     assert "tree" in cfg and data["analysis"]["metrics"]["shape"] == "1-2-6"
     # per-position edit: one manager gets an extra report on a different model
-    cfg["tree"]["children"][0]["children"].append({"role": "mousquetaire", "model": "haiku"})
+    cfg["tree"]["children"][0]["children"].append({"role": "private", "model": "haiku"})
     cfg["knowledge"] = {"wikis": [{"name": "handbook", "scope": "org", "publish_brief": True}]}
     cfg["communication"] = {"peers": True, "skip_up": 1}
     status, a = call("/api/analyze", {"config": cfg})
     assert status == 200 and a["ok"], a
     assert a["metrics"]["shape"] == "1-2-7" and not a["metrics"]["uniform"]
-    assert {c["kind"] for c in a["contacts"]["mousquetaire-1.4"]} == {"peer", "skip_up"}
+    assert {c["kind"] for c in a["contacts"]["private-1.4"]} == {"peer", "skip_up"}
     assert a["wikis"][0]["id"] == "handbook" and len(a["wikis"][0]["members"]) == 10
     status, saved = call("/api/orgs/edited", {"config": cfg})
     assert status == 200 and saved["form"] == "tree"
@@ -79,7 +80,7 @@ def test_generate_and_yaml_roundtrip(server):
                                         "ladder": [{"model": "sonnet"}, {"model": "haiku"}],
                                         "worker": {"model": "gpt-oss-120b"}})
     assert status == 200 and g["analysis"]["metrics"]["shape"] == "1-2-4-8"
-    assert g["analysis"]["layers"] == ["maréchal", "colonel", "capitaine", "mousquetaire"]
+    assert g["analysis"]["layers"] == ["field-marshal", "colonel", "captain", "private"]
     status, y = call("/api/yaml", {"yaml": g["analysis"]["yaml"]})
     assert status == 200 and y["analysis"]["metrics"]["shape"] == "1-2-4-8"
 
@@ -108,23 +109,56 @@ def test_real_run_requires_confirmation(server):
     assert status == 400 and "confirm" in err["error"]
 
 
-def test_wiki_endpoints_live_and_archive(server):
-    call, _, _ = server
-    _, data = call("/api/orgs/etat-major")
-    _, started = call("/api/runs", {"config": data["config"], "task": "mixed:products=3,cities=2", "mock": True,
-                                    "budget": 0.2})
-    for _ in range(100):
-        _, st = call(f"/api/runs/{started['run']}?since=0")
+def _wait(call, key):
+    for _ in range(150):
+        _, st = call(f"/api/runs/{key}?since=0")
         if st["status"] != "running":
-            break
+            return st
         time.sleep(0.1)
-    status, live = call(f"/api/runs/{started['run']}/wikis")
-    assert status == 200 and {i["id"] for i in live["instances"]} >= {"ordres", "carnet/colonel-du-genie"}
-    page = next(p for i in live["instances"] if i["id"] == "ordres" for p in i["pages"] if p["title"] == "Plan")
-    assert page["revisions"][0]["role"] == "maréchal"
-    status, archive = call("/api/archive")
-    assert status == 200 and archive[0]["run_id"] == st["run_id"] and archive[0]["pages"] >= 3
-    status, saved = call(f"/api/archive/{st['run_id']}/wikis")
-    assert status == 200 and saved["org"] == "etat-major"
-    status, _ = call("/api/archive/../../etc/wikis")
+    raise AssertionError("run did not finish")
+
+
+def test_mission_run_and_explorer(server):
+    call, _, _ = server
+    _, data = call("/api/orgs/general-staff")
+    status, started = call("/api/runs", {"config": data["config"], "mock": True, "budget": 0.2,
+                                         "mission": "Build a simulation of orbital dynamics across LEO, MEO and GEO."})
+    assert status == 200 and started["task"].startswith("mission/build-a-simulation")
+    st = _wait(call, started["run"])
+    assert st["status"] == "finished" and st["summary"]["score"] is None and st["summary"]["status"] == "completed"
+    rid = st["run_id"]
+    _, runs = call("/api/explorer/runs")
+    assert runs[0]["run_id"] == rid
+    _, orders = call(f"/api/explorer/{rid}/orders")
+    by_id = {o["id"]: o for o in orders["orders"]}
+    assert by_id[0]["from"] == "client" and by_id[0]["to"] == "field-marshal" and "orbital" in by_id[0]["text"]
+    firsts = [o for o in orders["orders"] if o["parent"] == 0]
+    assert {o["to"] for o in firsts} == {"intelligence-colonel", "engineer-colonel"}
+    assert all(o["report"] for o in orders["orders"]) and by_id[0]["report"]["status"] == "submitted"
+    assert "field-marshal" in orders["goals"] and "engineer-colonel" in orders["goals"]
+    status, wikis = call(f"/api/explorer/{rid}/wikis")
+    assert status == 200 and {i["id"] for i in wikis["instances"]} >= {"orders", "unit-log/engineer-colonel"}
+    page = next(p for i in wikis["instances"] if i["id"] == "orders" for p in i["pages"] if p["title"] == "Plan")
+    assert page["revisions"][0]["role"] == "field-marshal"
+    status, files = call(f"/api/explorer/{rid}/files")
+    assert status == 200 and "files" in files
+    status, _ = call("/api/explorer/../../etc/orders")
     assert status in (400, 404)
+
+
+def test_models_api_local_overrides_and_test(server):
+    call, _, _ = server
+    _, m = call("/api/models")
+    assert {e["name"] for e in m["endpoints"]} >= {"anthropic", "openrouter", "openai", "ollama", "mock"}
+    status, saved = call("/api/models/local", {
+        "endpoints": {"vllm": {"type": "openai", "base_url": "http://gpu-box:8000/v1", "api_key_env": None}},
+        "models": {"big-local": {"endpoint": "vllm", "model": "Qwen/Qwen3-32B"}}})
+    assert status == 200
+    assert any(e["name"] == "vllm" and e["source"] == "local" for e in saved["endpoints"])
+    assert any(x["alias"] == "big-local" and x["endpoint"] == "vllm" for x in saved["models"])
+    _, cat = call("/api/catalog")
+    assert any(x["alias"] == "big-local" for x in cat["models"])
+    status, err = call("/api/models/local", {"endpoints": {"bad": {"type": "openai", "api_key": "sk-123"}}, "models": {}})
+    assert status == 400
+    status, probe = call("/api/models/test", {"model": "mock"})
+    assert status == 200 and probe["ok"]

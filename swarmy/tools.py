@@ -179,19 +179,23 @@ class Toolbox:
 
         ctx.delegate_rounds[agent.name] += 1
         terms = ctx.task.key_terms
+        order_ids: dict[str, int] = {}
         for to, text in jobs.items():
             child = by_name[to]
             ctx.assign_counts[to] += 1
+            order_ids[to] = ctx.next_order()
             low = text.lower()
             ctx.event(agent, "assign", {
                 "to": to, "to_level": child.level, "leaf": not child.children, "chars": len(text),
                 "round": ctx.assign_counts[to], "terms": [t for t in terms if t.lower() in low],
-                "preview": text[:240],
+                "order_id": order_ids[to], "parent_order": agent.current_order,
+                "from_role": agent.spec.role, "to_role": child.spec.role, "text": text, "preview": text[:240],
             })
 
         ctx.live(agent, "waiting", {"on": list(jobs)})
         async with asyncio.TaskGroup() as tg:
-            futures = {to: tg.create_task(by_name[to].handle(assignment_message(agent, text), ctx))
+            futures = {to: tg.create_task(by_name[to].handle(assignment_message(agent, text), ctx,
+                                                             order_id=order_ids[to]))
                        for to, text in jobs.items()}
         ctx.live(agent, "working", {})
 
@@ -199,6 +203,7 @@ class Toolbox:
         for to, fut in futures.items():
             rep = fut.result()
             ctx.event(by_name[to], "report", {"to": agent.name, "chars": len(rep["report"]), "status": rep["status"],
+                                              "order_id": order_ids[to], "text": rep["report"],
                                               "preview": rep["report"][:240]})
             parts.append(f"### Report from {to} [{rep['status']}]\n{rep['report']}")
         if ctx.task.has_workspace:

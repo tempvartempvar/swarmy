@@ -50,8 +50,14 @@ def cmd_run(args) -> int:
 
     catalog = Catalog.load(args.models, offline=args.mock)
     org = _org_from_args(args)
-    family, params = parse_task_spec(args.task)
-    task = make_task(family, params, args.seed)
+    if args.mission or args.mission_file:
+        text = args.mission or Path(args.mission_file).read_text()
+        task = make_task("mission", {"text": text}, args.seed)
+    elif args.task:
+        family, params = parse_task_spec(args.task)
+        task = make_task(family, params, args.seed)
+    else:
+        raise SystemExit("give --task SPEC or --mission TEXT")
     results, db = _paths(args)
     print(f"org:  {org.name}  [{org.shape}]  {org.describe()}")
     print(f"task: {task.task_id}  (budget ${args.budget:.2f}{', MOCK' if args.mock else ''})")
@@ -67,7 +73,8 @@ def cmd_run(args) -> int:
             tracer.close()
 
     s = asyncio.run(go())
-    print(f"\nstatus {s['status']}  score {s['score']:.2f}  {'PASS' if s['passed'] else ''}")
+    score = "not graded" if s["score"] is None else f"{s['score']:.2f}"
+    print(f"\nstatus {s['status']}  score {score}  {'PASS' if s['passed'] else ''}")
     print(f"cost ${s['cost_usd']:.4f}  wall {s['wall_s']:.1f}s  calls {s['n_calls']}")
     if s.get("answer") is not None:
         print(f"answer: {s['answer']}")
@@ -79,6 +86,8 @@ def cmd_run(args) -> int:
     for name, n in s["nodes"].items():
         print(f"{'  ' * n['level'] + name:28} {n['model'][:16]:16} {n.get('calls', 0):>5} ${n.get('cost', 0):>8.4f}")
     print(f"\ntranscript: {s['run_dir']}/transcript.jsonl")
+    if task.family == "mission":
+        print(f"workspace:  {s['run_dir']}/workspace   (orders: swarmy orders {s['run_id']})")
     return 0 if s["status"] != "fatal" else 2
 
 
@@ -164,28 +173,68 @@ def cmd_task(args) -> int:
 
 def cmd_models(args) -> int:
     catalog = Catalog.load(args.models)
-    if args.action == "refresh":
-        n = len(catalog.openrouter_models(refresh=True))
-        print(f"cached {n} OpenRouter models")
+    if args.action == "endpoints":
+        print(f"{'endpoint':14} {'type':10} {'key':6} {'source':10} base url")
+        for name, ep in catalog.endpoints.items():
+            key = "-" if ep.api_key_env is None else ("set" if ep.key_present else "MISSING")
+            print(f"{name:14} {ep.type:10} {key:6} {ep.source:10} {ep.base_url or '(SDK default)'}"
+                  + (f"   [{ep.api_key_env}]" if ep.api_key_env else ""))
         return 0
-    live = {}
-    if args.action == "check":
-        live = catalog.openrouter_models(refresh=True)
-    print(f"{'alias':16} {'provider':10} {'model':40} {'in $/M':>8} {'out $/M':>8}  notes")
+    if args.action == "test":
+        if not args.name:
+            raise SystemExit("usage: swarmy models test <alias or endpoint:model>")
+        from .providers import probe
+
+        spec = catalog.resolve(args.name)
+        print(f"testing {args.name} ({spec.endpoint}:{spec.model}) with one short real call...")
+        r = asyncio.run(probe(spec))
+        if r["ok"]:
+            print(f"OK in {r['latency_s']}s: {r['text']!r}  ({r['input_tokens']} in / {r['output_tokens']} out, "
+                  f"${r['cost_usd']:.6f}, served by {r['served_model']})")
+            return 0
+        print(f"FAILED after {r['latency_s']}s: {r['error']}")
+        return 1
+    live_eps = [n for n, ep in catalog.endpoints.items() if ep.live_pricing]
+    if args.action == "refresh":
+        for name in live_eps:
+            print(f"cached {len(catalog.live_models(name, refresh=True))} {name} models")
+        return 0
+    live = {n: catalog.live_models(n, refresh=True) for n in live_eps} if args.action == "check" else {}
+    print(f"{'alias':16} {'endpoint':11} {'model':40} {'in $/M':>8} {'out $/M':>8}  notes")
     for alias, spec in catalog.models.items():
-        note = ""
-        if args.action == "check" and spec.provider == "openrouter":
-            meta = live.get(spec.model)
+        note = "" if spec.price_known else "price unknown (budget guard can't limit it)"
+        if spec.endpoint in live:
+            meta = live[spec.endpoint].get(spec.model)
             if meta is None:
-                note = "NOT FOUND on OpenRouter"
+                note = f"NOT FOUND on {spec.endpoint}"
             else:
                 p = meta.get("pricing") or {}
                 li, lo = float(p.get("prompt") or 0) * 1e6, float(p.get("completion") or 0) * 1e6
-                if abs(li - spec.price.input) > 1e-6 or abs(lo - spec.price.output) > 1e-6:
+                if abs(li - spec.rate.input) > 1e-6 or abs(lo - spec.rate.output) > 1e-6:
                     note = f"live price {li:.4g}/{lo:.4g}"
                 if "tools" not in (meta.get("supported_parameters") or []):
                     note += " NO TOOL SUPPORT"
-        print(f"{alias:16} {spec.provider:10} {spec.model[:40]:40} {spec.price.input:>8.3f} {spec.price.output:>8.3f}  {note}")
+        if spec.endpoint_cfg and not spec.endpoint_cfg.key_present:
+            note += f" ({spec.endpoint_cfg.api_key_env} not set)"
+        print(f"{alias:16} {spec.endpoint:11} {spec.model[:40]:40} {spec.rate.input:>8.3f} {spec.rate.output:>8.3f}  {note}")
+    return 0
+
+
+def cmd_orders(args) -> int:
+    from .orders import load_orders, render
+    from .tracing import Tracer
+
+    _, db = _paths(args)
+    tracer = Tracer(db)
+    run_id = args.run
+    if run_id in (None, "latest"):
+        rows = tracer.query("SELECT run_id FROM events WHERE kind='mission' ORDER BY id DESC LIMIT 1")
+        if not rows:
+            raise SystemExit("no runs with recorded orders yet")
+        run_id = rows[0]["run_id"]
+    data = load_orders(tracer, run_id)
+    print(f"run {run_id}  {data['task_id'] or ''}  [{data['status']}]\n")
+    print(render(data, full=args.full))
     return 0
 
 
@@ -253,7 +302,9 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("run", help="run one org on one task")
     p.add_argument("--org", required=True, help="org config YAML")
-    p.add_argument("--task", required=True, help="task spec, e.g. qa:kind=chain,hops=3 | code:n=6 | mixed")
+    p.add_argument("--task", help="benchmark task spec, e.g. qa:kind=chain,hops=3 | code:n=6 | mixed")
+    p.add_argument("--mission", help="a free-form objective for the top of the org (ungraded)")
+    p.add_argument("--mission-file", help="read the mission text from a file")
     p.add_argument("--seed", type=int, default=1)
     p.add_argument("--budget", type=float, default=0.50, help="hard cap for this run in USD (default 0.50)")
     p.add_argument("--timeout", type=float, default=1200)
@@ -291,9 +342,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--gold", action="store_true")
     p.set_defaults(fn=cmd_task)
 
+    p = sub.add_parser("orders", help="show how the mission cascaded down the chain of command")
+    p.add_argument("run", nargs="?", default="latest", help="run id (default: latest)")
+    p.add_argument("--full", action="store_true", help="print full order and report texts")
+    p.set_defaults(fn=cmd_orders)
+
     p = sub.add_parser("wiki", help="browse the wikis a run produced, with who edited what")
     p.add_argument("run", nargs="?", default="latest", help="run id (default: latest run with wiki pages)")
-    p.add_argument("--wiki", help="only this wiki instance, e.g. carnet/capitaine-1")
+    p.add_argument("--wiki", help="only this wiki instance, e.g. unit-log/captain-1")
     p.add_argument("--page", help="print this page with its revision history")
     p.set_defaults(fn=cmd_wiki)
 
@@ -303,8 +359,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--orgs-dir", default=None, help="where org YAML files are read and saved (default configs/orgs)")
     p.set_defaults(fn=cmd_ui)
 
-    p = sub.add_parser("models", help="list / check / refresh the model catalog")
-    p.add_argument("action", nargs="?", default="list", choices=["list", "check", "refresh"])
+    p = sub.add_parser("models", help="list models / endpoints, check live prices, or test a model")
+    p.add_argument("action", nargs="?", default="list", choices=["list", "endpoints", "check", "refresh", "test"])
+    p.add_argument("name", nargs="?", help="for `test`: a model alias or endpoint:model-id")
     p.set_defaults(fn=cmd_models)
 
     args = ap.parse_args(argv)

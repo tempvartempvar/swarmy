@@ -1,6 +1,6 @@
-# Baseline: a lone franc-tireur does everything itself, no chain of command.
+# Baseline: a lone wolf does everything itself, no chain of command.
 name: solo-sonnet
 levels:
-  - role: franc-tireur
+  - role: lone-wolf
     model: sonnet
     effort: medium

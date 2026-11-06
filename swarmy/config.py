@@ -26,11 +26,11 @@ Audience = Literal["all", "managers", "workers"]
 # Default output-token cap per call, by effort. Thinking counts against max_tokens,
 # so high-effort positions need room. The run budget can clamp these further.
 DEFAULT_MAX_TOKENS = {None: 12000, "low": 4000, "medium": 8000, "high": 16000, "xhigh": 24000, "max": 32000}
-SETTING_FIELDS = ("role", "model", "effort", "max_turns", "max_tokens", "can_do_work", "review_tools", "prompt")
+SETTING_FIELDS = ("role", "model", "effort", "goal", "max_turns", "max_tokens", "can_do_work", "review_tools", "prompt")
 
 
 def auto_name(role: str, path: str) -> str:
-    """Default position name: the title for the top position, else '<title>-<path>' (e.g. capitaine-1.2)."""
+    """Default position name: the title for the top position, else '<title>-<path>' (e.g. captain-1.2)."""
     slug = re.sub(r"\s+", "-", role.strip())
     return slug if not path else f"{slug}-{path}"
 
@@ -42,6 +42,7 @@ class NodeSettings(BaseModel):
     role: str
     model: str
     effort: Effort | None = None
+    goal: str = ""  # standing objective for this position, weighed alongside the orders it receives
     max_turns: int | None = None
     max_tokens: int | None = None
     can_do_work: bool = False  # managers: also get hands-on tools
@@ -157,7 +158,7 @@ class OrgConfig(BaseModel):
     knowledge: Knowledge = Knowledge()
     communication: CommunicationRules = CommunicationRules()
     memory: Literal["persistent", "fresh"] = "persistent"
-    disclose_models: bool = False
+    disclose_models: bool = True  # tell commanders which model each subordinate runs
     manager_max_turns: int = 12
     worker_max_turns: int = 24
     _root: Node | None = PrivateAttr(None)
@@ -458,6 +459,7 @@ class LevelTemplate(BaseModel):
     model: str
     effort: Effort | None = None
     role: str | None = None
+    goal: str = ""
     max_tokens: int | None = None
     max_turns: int | None = None
     prompt: str = ""
@@ -492,7 +494,7 @@ class GenerateSpec(BaseModel):
             top = self.ladder[0]
             orgs.append(OrgConfig(
                 name=f"{self.name}-solo",
-                levels=[LevelSpec(role=top.role or SOLO_RANK, model=top.model, effort=top.effort,
+                levels=[LevelSpec(role=top.role or SOLO_RANK, model=top.model, effort=top.effort, goal=top.goal,
                                   max_tokens=top.max_tokens, max_turns=top.max_turns, prompt=top.prompt)],
             ))
         for d in self.depths:
@@ -509,10 +511,10 @@ class GenerateSpec(BaseModel):
                 role = tpl.role or ranks[i]
                 if any(lv.role == role for lv in levels):
                     role = ranks[i] if not any(lv.role == ranks[i] for lv in levels) else f"{role}-{i}"
-                levels.append(LevelSpec(role=role, model=tpl.model, effort=tpl.effort, span=span,
+                levels.append(LevelSpec(role=role, model=tpl.model, effort=tpl.effort, span=span, goal=tpl.goal,
                                         max_tokens=tpl.max_tokens, max_turns=tpl.max_turns, prompt=tpl.prompt))
             w = self.worker
-            levels.append(LevelSpec(role=w.role or WORKER_RANK, model=w.model, effort=w.effort,
+            levels.append(LevelSpec(role=w.role or WORKER_RANK, model=w.model, effort=w.effort, goal=w.goal,
                                     max_tokens=w.max_tokens, max_turns=w.max_turns, prompt=w.prompt))
             orgs.append(OrgConfig.model_validate({
                 "name": f"{self.name}-d{d}",

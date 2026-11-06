@@ -21,8 +21,8 @@ from .tasks.base import tokenize
 @dataclass
 class Revision:
     version: int
-    author: str  # position name, e.g. capitaine-1.2 (or "client")
-    role: str  # rank / title, e.g. capitaine
+    author: str  # position name, e.g. captain-1.2 (or "client")
+    role: str  # rank / title, e.g. captain
     level: int | None  # depth in the hierarchy (0 = top)
     model: str | None
     mode: str  # create | replace | append

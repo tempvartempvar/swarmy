@@ -13,7 +13,7 @@ const KIND_COLOR = { manager: "var(--k-chain)", report: "var(--k-chain)", peer: 
 const KIND_NAME = { manager: "Commanding officer", report: "Direct subordinate", peer: "Comrade (same unit)",
   cross_team: "Same rank, other unit", skip_up: "Skip-level up", skip_down: "Skip-level down", other: "Anywhere (open ranks)" };
 const FAM_COLOR = { opus: "var(--m-opus)", sonnet: "var(--m-sonnet)", haiku: "var(--m-haiku)", paid: "var(--m-paid)",
-  free: "var(--m-free)", mock: "var(--m-mock)", unknown: "var(--m-unknown)" };
+  free: "var(--m-free)", local: "var(--m-local)", custom: "var(--m-custom)", mock: "var(--m-mock)", unknown: "var(--m-unknown)" };
 const WIKI_COLORS = ["#1baf7a", "#2a78d6", "#eb6834", "#6250d6", "#eda100", "#e87ba4"];
 const EFFORT_NOTE = { "": "model default", low: "low", medium: "medium", high: "high", xhigh: "extra high", max: "max" };
 
@@ -75,16 +75,25 @@ function banner(msg) { const b = $("#banner"); b.hidden = !msg; b.textContent = 
 function stripNames(n) { delete n.name; delete n._id; (n.children || []).forEach(stripNames); return n; }
 function assignIds(n) { if (!n._id) n._id = NEXT_ID++; (n.children || []).forEach(assignIds); }
 
+function modelEndpoint(model) {
+  const c = S.catalog.models.find((m) => m.alias === model);
+  if (c) return c.endpoint;
+  const ep = (model || "").split(":")[0];
+  return S.catalog.endpoints.some((e) => e.name === ep) ? ep : null;
+}
 function family(model) {
   const c = S.catalog.models.find((m) => m.alias === model);
-  const id = ((c && c.model) || model || "").toLowerCase();
-  const provider = c ? c.provider : model.startsWith("openrouter:") ? "openrouter" : model.startsWith("anthropic:") ? "anthropic" : model.startsWith("mock") ? "mock" : "unknown";
-  if (provider === "mock") return "mock";
+  const epName = modelEndpoint(model);
+  const ep = S.catalog.endpoints.find((e) => e.name === epName);
+  const id = ((c && c.model) || (model || "").split(":").slice(1).join(":") || model || "").toLowerCase();
+  if (!ep) return "unknown";
+  if (ep.type === "mock") return "mock";
   if (id.includes("opus")) return "opus";
   if (id.includes("sonnet")) return "sonnet";
   if (id.includes("haiku")) return "haiku";
-  if (provider === "openrouter") return (c && c.free) || id.endsWith(":free") ? "free" : "paid";
-  return "unknown";
+  if (ep.local) return "local";
+  if ((c && c.free) || id.endsWith(":free")) return "free";
+  return epName === "openrouter" ? "paid" : "custom";
 }
 const modelLabel = (m) => (m.startsWith("openrouter:") ? m.split("/").pop() : m);
 
@@ -142,7 +151,7 @@ function rankBetween(upper, lower) {
   const hi = lad.indexOf(upper), lo = lad.includes(lower) ? lad.indexOf(lower) : lad.length;
   if (hi >= 0 && hi + 1 < lo) return lad[hi + 1];
   if (hi < 0 && lo > 0) return lad[lo - 1];
-  return `${upper || "officier"}-adjoint`;
+  return `deputy-${upper || "officer"}`;
 }
 const gloss = (role) => S.catalog.ranks.gloss[role] || null;
 const titleCase = (r) => (r ? r.charAt(0).toUpperCase() + r.slice(1) : r);
@@ -467,7 +476,7 @@ function renderChart() {
     if (showContacts && S.selected !== id && contactNames.size && !contactNames.has(name)) cls += " dim";
     const gn = s("g", { class: cls, transform: `translate(${p.x},${p.y})`, style: "cursor:pointer",
       onclick: (e) => { e.stopPropagation(); select(id); } });
-    gn.append(s("title", {}, `${name} — ${titleCase(n.role)}${gloss(n.role) ? " (" + gloss(n.role) + ")" : ""}\nmodel: ${n.model}${n.effort ? " (" + n.effort + ")" : ""}`));
+    gn.append(s("title", {}, `${name} — ${titleCase(n.role)}${gloss(n.role) ? " (" + gloss(n.role) + ")" : ""}\nmodel: ${n.model}${n.effort ? " (" + n.effort + ")" : ""}${n.goal ? "\ngoal: " + n.goal : ""}`));
     if (run) gn.append(s("rect", { class: "state", x: -4, y: -4, width: W + 8, height: H + 8, rx: 13 }));
     const strokeAttrs = wikiWriters && wikiWriters.has(name) ? { stroke: WIKI_COLORS[S.selectedWiki % WIKI_COLORS.length], "stroke-width": 2.5 }
       : wikiReaders && wikiReaders.has(name) ? { stroke: WIKI_COLORS[S.selectedWiki % WIKI_COLORS.length], "stroke-width": 2, "stroke-dasharray": "4 3" } : {};
@@ -484,6 +493,7 @@ function renderChart() {
       const nW = S.analysis.wikis.filter((w) => w.readers.includes(name) || w.writers.includes(name)).length;
       const nC = (S.analysis.contacts[name] || []).length;
       let icons = [];
+      if (n.goal) icons.push("◎");
       if (nW) icons.push(`▤${nW}`);
       if (nC) icons.push(`⇄${nC}`);
       if (icons.length) gn.append(s("text", { class: "ico", x: W - 8, y: 18, "text-anchor": "end" }, icons.join("  ")));
@@ -519,7 +529,7 @@ function renderLegend() {
     items.push(h("div", { class: "item" }, h("span", { class: "box", style: `background:${c};opacity:.25` }), "one wiki instance"));
   } else {
     const fams = new Set(Object.values(S.idx).map((e) => family(e.node.model)));
-    const names = { opus: "Opus", sonnet: "Sonnet", haiku: "Haiku", paid: "OpenRouter (paid)", free: "OpenRouter (free)", mock: "Mock", unknown: "Unknown model" };
+    const names = { opus: "Opus", sonnet: "Sonnet", haiku: "Haiku", paid: "OpenRouter", free: "Free (rate-limited)", local: "Local", custom: "Other endpoint", mock: "Mock", unknown: "Unknown model" };
     Object.keys(names).filter((f) => fams.has(f)).forEach((f) => items.push(h("div", { class: "item" }, h("span", { class: "box", style: `background:${FAM_COLOR[f]}` }), names[f])));
   }
   lg.replaceChildren(...items);
@@ -586,19 +596,17 @@ function num(value, onchange, k, attrs = {}) {
 }
 function modelSelect(value, onchange, k) {
   const ms = S.catalog.models;
-  const opt = (m) => ({ value: m.alias, label: `${m.alias} · ${m.free ? "free" : m.provider === "mock" ? "offline" : `$${m.input}/$${m.output}`}` });
-  const groups = [
-    { group: "Anthropic", items: ms.filter((m) => m.provider === "anthropic").map(opt) },
-    { group: "OpenRouter", items: ms.filter((m) => m.provider === "openrouter" && !m.free).map(opt) },
-    { group: "OpenRouter free (rate-limited)", items: ms.filter((m) => m.free).map(opt) },
-    { group: "Offline", items: ms.filter((m) => m.provider === "mock").map(opt) },
-  ].filter((g) => g.items.length);
+  const price = (m) => (m.kind === "mock" ? "offline" : m.local ? "local" : m.free ? "free" : m.price_known ? `$${m.input}/$${m.output}` : "price?");
+  const opt = (m) => ({ value: m.alias, label: `${m.alias} · ${price(m)}` });
+  const groups = S.catalog.endpoints.map((e) => ({ group: `${e.name}${e.api_key_env && !e.key_present ? " (no key yet)" : ""}`, items: ms.filter((m) => m.endpoint === e.name).map(opt) }))
+    .filter((g) => g.items.length);
   const known = ms.some((m) => m.alias === value);
-  const options = [...(known ? [] : [{ value, label: `${value} (custom)` }]), ...groups, { value: "__custom", label: "Other OpenRouter model…" }];
+  const options = [...(known ? [] : [{ value, label: `${value} (inline)` }]), ...groups, { value: "__custom", label: "Other model (endpoint:model-id)…" }];
   return select_(options, value, (v) => {
     if (v === "__custom") {
-      const id = prompt("OpenRouter model id (e.g. qwen/qwen3.7-flash). Must support tool calling.");
-      if (id) onchange(id.startsWith("openrouter:") ? id : "openrouter:" + id.trim()); else renderPanel();
+      const names = S.catalog.endpoints.map((e) => e.name).join(", ");
+      const id = prompt(`Model as <endpoint>:<model-id>, e.g. openrouter:qwen/qwen3.7-flash or ollama:qwen3:8b\nEndpoints: ${names}\n(add endpoints in the Models dialog)`);
+      if (id && id.includes(":")) onchange(id.trim()); else { if (id) toast("Use <endpoint>:<model-id>"); renderPanel(); }
     } else onchange(v);
   }, k);
 }
@@ -674,7 +682,10 @@ function levelEditor(d) {
     h("div", { class: "head" }, h("strong", {}, `Edit all ${layer.length} position${layer.length > 1 ? "s" : ""} at L${d}`)),
     field("Role", text(same("role") || "", (v) => v && setField(layer, "role", v), "lv-role", { placeholder: "mixed" })),
     field("Model", modelSelect(same("model") || first.model, (v) => setField(layer, "model", v), "lv-model")),
-    field("Effort", select_(effortOptions(), same("effort") || "", (v) => setField(layer, "effort", v || null), "lv-eff")));
+    field("Effort", select_(effortOptions(), same("effort") || "", (v) => setField(layer, "effort", v || null), "lv-eff")),
+    h("div", { class: "field wide" }, h("label", {}, "Goal for this level"),
+      h("textarea", { rows: 2, "data-k": "lv-goal", placeholder: same("goal") === null ? "(positions differ)" : "e.g. Break work into parts small enough for one private each.",
+        onchange: (ev) => setField(layer, "goal", ev.target.value.trim() || null) }, same("goal") || "")));
 }
 async function quickBuild() {
   const q = S.quick;
@@ -703,6 +714,10 @@ function positionPanel() {
   add("≈ per call", m.est_call_cost != null ? money(m.est_call_cost) : "–");
   out.push(dl);
 
+  out.push(h("h3", {}, "Goal"));
+  out.push(h("div", { class: "field wide" }, h("label", { class: "small muted" }, `A standing objective ${m.name || "this position"} weighs alongside the orders it receives (applies to: ${S.scope === "node" ? "this position" : S.scope === "level" ? "the whole level" : "every " + n.role})`),
+    h("textarea", { rows: 2, "data-k": "p-goal", placeholder: e.parent ? "e.g. Keep every deliverable tested and documented." : "e.g. Deliver a complete, working result within budget.",
+      onchange: (ev) => setField(targets(id), "goal", ev.target.value.trim() || null) }, n.goal || "")));
   out.push(h("h3", {}, "Model"));
   const layer = S.layers[e.depth], sameRole = Object.values(S.idx).filter((x) => x.node.role === n.role).length;
   out.push(h("div", { class: "scope" },
@@ -720,11 +735,21 @@ function positionPanel() {
 
   out.push(h("h3", {}, "Rank and role"));
   out.push(field("Rank", text(n.role, (v) => v && setField(targets(id), "role", v), "p-role", { list: "rank-list" }), "any title works; it's only a label"));
-  out.push(h("datalist", { id: "rank-list" }, [...S.catalog.ranks.ladder, S.catalog.ranks.worker, "éclaireur", "sapeur", S.catalog.ranks.solo].map((r) => h("option", { value: r }))));
+  out.push(h("datalist", { id: "rank-list" }, [...S.catalog.ranks.ladder, S.catalog.ranks.worker, "scout", "sapper", S.catalog.ranks.solo].map((r) => h("option", { value: r }))));
   out.push(field("Name", text(n.name, (v) => mutate(() => { if (v) n.name = v; else delete n.name; }), "p-name", { placeholder: m.name || "" }), "leave empty for the automatic name"));
   out.push(h("div", { class: "field wide" }, h("label", {}, "Role notes (added to the system prompt)"),
     h("textarea", { rows: 3, "data-k": "p-prompt", onchange: (ev) => setField(targets(id), "prompt", ev.target.value.trim() || null) }, n.prompt || "")));
 
+  if (S.runOrders && S.run && m.name) {
+    const got = S.runOrders.orders.filter((o) => o.to === m.name), gave = S.runOrders.orders.filter((o) => o.from === m.name);
+    if (got.length || gave.length) {
+      out.push(h("h3", {}, "Orders in the last run"));
+      got.forEach((o) => out.push(h("div", { class: "card small" }, h("div", {}, h("strong", {}, o.from === "client" ? "From you" : `From ${o.from}`), o.round > 1 ? ` (round ${o.round})` : "", o.report ? ` · ${o.report.status}` : ""),
+        h("div", {}, trunc((o.text || "").replace(/\s+/g, " "), 240)),
+        h("span", { class: "linklike", onclick: () => { openExplorer("orders", S.runOrders.run_id).then(() => { S.ex.sel = o.id; renderOrders(); }); } }, "open in run explorer"))));
+      if (gave.length) out.push(h("p", { class: "small" }, `Issued ${gave.length} order${gave.length > 1 ? "s" : ""}: `, gave.map((o, i) => [i ? ", " : "", h("span", { class: "linklike", onclick: () => { openExplorer("orders", S.runOrders.run_id).then(() => { S.ex.sel = o.id; renderOrders(); }); } }, o.to)])));
+    }
+  }
   out.push(h("h3", {}, "Knowledge access"));
   const ws = S.analysis ? S.analysis.wikis.filter((w) => w.readers.includes(m.name) || w.writers.includes(m.name)) : [];
   out.push(ws.length ? h("div", { class: "small" }, ws.map((w) => h("div", {}, h("code", {}, w.id), ` · ${w.label} · ${w.writers.includes(m.name) ? "read/write" : "read only"}`)))
@@ -755,11 +780,11 @@ function knowledgePanel() {
     k.wikis.push(preset); S.selectedWiki = k.wikis.length - 1;
   });
   out.push(h("div", { class: "row" },
-    h("button", { title: "one wiki for the whole army", onclick: () => addWiki({ name: "ordres", scope: "org" }) }, "+ Army-wide"),
-    h("button", { title: "one notebook per unit: an officer and their direct subordinates", onclick: () => addWiki({ name: "carnet", scope: "team" }) }, "+ Per unit"),
-    h("button", { disabled: S.layers.length < 3, title: "one dossier per division (needs at least 3 levels)", onclick: () => addWiki({ name: "dossier", scope: "department", level: 1 }) }, "+ Per division")));
+    h("button", { title: "one wiki for the whole army", onclick: () => addWiki({ name: "orders", scope: "org" }) }, "+ Army-wide"),
+    h("button", { title: "one log per unit: an officer and their direct subordinates", onclick: () => addWiki({ name: "unit-log", scope: "team" }) }, "+ Per unit"),
+    h("button", { disabled: S.layers.length < 3, title: "one file per division (needs at least 3 levels)", onclick: () => addWiki({ name: "division-file", scope: "department", level: 1 }) }, "+ Per division")));
   if (!k.wikis.length) out.push(h("p", { class: "muted small", style: "margin-top:10px" }, "No wikis: knowledge moves only through orders and reports."));
-  out.push(h("p", { class: "small" }, "To read what agents wrote, with who changed what, open the ", h("span", { class: "linklike", onclick: openWikiBrowser }, "wiki browser"), "."));
+  out.push(h("p", { class: "small" }, "To read what agents wrote, with who changed what, open the ", h("span", { class: "linklike", onclick: () => openExplorer("wikis") }, "run explorer"), "."));
   k.wikis.forEach((w, i) => {
     const color = WIKI_COLORS[i % WIKI_COLORS.length];
     const insts = S.analysis ? S.analysis.wikis.filter((x) => x.name === w.name) : [];
@@ -826,38 +851,57 @@ function commPanel() {
 /* ---------------- runs ---------------- */
 function runPanel() {
   const r = S.run, running = r && r.status === "running";
-  const cfg = S.runCfg = S.runCfg || { task: S.catalog.tasks[0].presets[0].spec, seed: 1, budget: 0.5, mock: true, confirm: false };
-  const out = [h("h2", {}, "Test run"),
-    h("p", {}, "Run this org on a task and watch it work. Mock mode uses scripted models: free and instant, good for checking the wiring before spending money.")];
-  const presetOpts = S.catalog.tasks.map((f) => ({ group: f.label, items: f.presets.map((p) => ({ value: p.spec, label: p.label })) }));
-  const isPreset = S.catalog.tasks.some((f) => f.presets.some((p) => p.spec === cfg.task));
-  out.push(field("Task", select_([...presetOpts, { value: "__custom", label: "Custom spec…" }], isPreset && !S.customTask ? cfg.task : "__custom",
+  const cfg = S.runCfg = S.runCfg || { task: "__mission", mission: "", seed: 1, budget: 0.5, mock: true, confirm: false };
+  const top = S.config.tree.role;
+  const out = [h("h2", {}, "Manoeuvres"),
+    h("p", {}, `Give ${titleCase(top)} a mission and watch the orders cascade down, or run a benchmark task. Mock mode uses scripted models: free and instant, good for checking the wiring before spending money.`)];
+  const presetOpts = S.catalog.tasks.map((f) => ({ group: `Benchmark: ${f.label}`, items: f.presets.map((p) => ({ value: p.spec, label: p.label })) }));
+  const isMission = cfg.task === "__mission";
+  const isPreset = isMission || S.catalog.tasks.some((f) => f.presets.some((p) => p.spec === cfg.task));
+  out.push(field("Task", select_([{ group: "Your own", items: [{ value: "__mission", label: "Mission (write it below)" }] }, ...presetOpts, { value: "__custom", label: "Custom benchmark spec…" }],
+    isPreset && !S.customTask ? cfg.task : "__custom",
     (v) => { if (v === "__custom") S.customTask = true; else { S.customTask = false; cfg.task = v; } renderPanel(); }, "r-task")));
+  if (isMission && !S.customTask) {
+    out.push(h("div", { class: "field wide" }, h("label", {}, `Mission for ${titleCase(top)}`),
+      h("textarea", { rows: 5, "data-k": "r-mission", placeholder: "e.g. Build a simulation of orbital dynamics for satellites in LEO, MEO, GEO and a Molniya orbit, comparing periods, velocities and ground tracks, with plots.",
+        oninput: (e) => { cfg.mission = e.target.value; const b = $("#start-run"); if (b) b.disabled = !cfg.mission.trim() || (!cfg.mock && !cfg.confirm); } }, cfg.mission || "")));
+    out.push(h("p", { class: "small muted" }, "Missions aren't graded: inspect the chain of orders and the files they built in the run explorer."));
+  }
   if (S.customTask || !isPreset) out.push(field("Spec", text(cfg.task, (v) => (cfg.task = v), "r-spec", { placeholder: "e.g. code:n=8,coupling=0.5" })));
   out.push(field("Seed", num(cfg.seed, (v) => (cfg.seed = v || 1), "r-seed", { min: 1 })));
   out.push(field("Budget", num(cfg.budget, (v) => (cfg.budget = v || 0.1), "r-budget", { min: 0.01, step: 0.05 }), "hard cap in USD for this run"));
   out.push(check("Mock models (no API calls)", cfg.mock, (v) => { cfg.mock = v; renderPanel(); }, null, "r-mock"));
   if (!cfg.mock) {
-    const keys = S.catalog.keys;
-    out.push(h("p", { class: "small" }, `API keys: Anthropic ${keys.anthropic ? "✓" : "✗ missing"} · OpenRouter ${keys.openrouter ? "✓" : "✗ missing"} (set them in .env and restart).`));
+    const used = [...new Set(Object.values(S.idx).map((e) => modelEndpoint(e.node.model)))].filter(Boolean);
+    const eps = Object.fromEntries(S.catalog.endpoints.map((e) => [e.name, e]));
+    out.push(h("p", { class: "small" }, "API keys: ", used.map((n, i) => {
+      const e = eps[n];
+      const ok = !e || !e.api_key_env || e.key_present;
+      return [i ? " · " : "", h("span", { class: ok ? "ok" : "bad" }, `${n} ${ok ? "✓" : `✗ (${e.api_key_env} not set)`}`)];
+    }), used.some((n) => eps[n] && eps[n].api_key_env && !eps[n].key_present) ? " Set them in .env and restart." : ""));
     out.push(check(`I accept spending up to $${Number(cfg.budget).toFixed(2)}`, cfg.confirm, (v) => { cfg.confirm = v; renderPanel(); }, null, "r-confirm"));
   }
   out.push(h("div", { class: "row end" },
-    running && S.config.knowledge && S.config.knowledge.wikis && S.config.knowledge.wikis.length ? h("button", { onclick: openWikiBrowser }, "Watch the wikis") : null,
+    running ? h("button", { onclick: () => openExplorer("orders") }, "Watch the chain of orders") : null,
     r && !running ? h("button", { onclick: () => { S.run = null; renderAll(); } }, "Clear") : null,
-    h("button", { class: "primary", disabled: running || (!cfg.mock && !cfg.confirm), onclick: startRun }, running ? "Running…" : "Start run")));
+    h("button", { id: "start-run", class: "primary", disabled: running || (!cfg.mock && !cfg.confirm) || (isMission && !S.customTask && !(cfg.mission || "").trim()), onclick: startRun }, running ? "Running…" : "Start run")));
   if (r) {
     const secs = ((r.finished || Date.now() / 1000) - r.started).toFixed(1);
     out.push(h("p", { class: "small" }, `${r.status} · ${secs}s · spent ${money(r.total_cost)} of $${Number(r.budget).toFixed(2)}${r.mock ? " (mock)" : ""} · ${r.task}`));
     if (r.summary) {
       const sm = r.summary;
       out.push(h("div", { class: "result" },
-        h("div", { class: "big" }, `score ${Number(sm.score).toFixed(2)} `, h("span", { class: sm.passed ? "pill-ok" : "pill-bad" }, sm.passed ? "PASS" : "not passed")),
+        sm.score == null ? h("div", { class: "big" }, "Mission ", h("span", { class: sm.status === "completed" ? "pill-ok" : "pill-bad" }, sm.status === "completed" ? "reported back" : sm.status))
+          : h("div", { class: "big" }, `score ${Number(sm.score).toFixed(2)} `, h("span", { class: sm.passed ? "pill-ok" : "pill-bad" }, sm.passed ? "PASS" : "not passed")),
         h("div", { class: "small" }, `status ${sm.status} · ${money(sm.cost_usd)} · ${Number(sm.wall_s).toFixed(1)}s · ${sm.n_calls} calls`),
         sm.answer != null ? h("div", { class: "small" }, `answer: ${trunc(String(sm.answer), 120)}`) : null,
+        sm.grade && sm.grade.files != null ? h("div", { class: "small" }, `${sm.grade.files} file(s) in the workspace`) : null,
         sm.grade && sm.grade.expected != null ? h("div", { class: "small" }, `expected: ${sm.grade.expected}`) : null,
         h("div", { class: "small muted" }, `transcript: ${sm.run_dir}/transcript.jsonl`),
-        S.config.knowledge && S.config.knowledge.wikis && S.config.knowledge.wikis.length ? h("div", { class: "row", style: "margin-top:6px" }, h("button", { onclick: openWikiBrowser }, "Read this run's wikis")) : null));
+        h("div", { class: "row", style: "margin-top:6px" },
+          h("button", { onclick: () => openExplorer("orders", r.run_id) }, "Chain of orders"),
+          h("button", { onclick: () => openExplorer("files", r.run_id) }, "Files"),
+          h("button", { onclick: () => openExplorer("wikis", r.run_id) }, "Wikis"))));
     }
     if (r.error) out.push(h("pre", { class: "small", style: "white-space:pre-wrap;color:var(--danger)" }, r.error));
     out.push(h("h3", {}, "Activity"));
@@ -871,8 +915,9 @@ function fmtEvent(ev) {
   const d = ev.data || {}, who = ev.node;
   const pv = (t) => (t ? h("span", { class: "pv" }, trunc(t, 220)) : null);
   switch (ev.kind) {
-    case "assign": return h("div", { class: "ev assign" }, `${who} → ${d.to}: assignment (${d.chars} chars${d.round > 1 ? ", rework" : ""})`, pv(d.preview));
-    case "report": return h("div", { class: "ev report" }, `${who} → ${d.to}: report [${d.status}]`, pv(d.preview));
+    case "mission": return h("div", { class: "ev assign" }, `Mission → ${d.to}`, pv(d.title));
+    case "assign": return h("div", { class: "ev assign" }, `${who} → ${d.to}: order #${d.order_id} (${d.chars} chars${d.round > 1 ? ", rework" : ""})`, pv(d.preview));
+    case "report": return h("div", { class: "ev report" }, `${who} → ${d.to === "client" ? "you" : d.to}: report [${d.status}]`, pv(d.preview));
     case "ask": return h("div", { class: "ev ask" }, `${who} asked ${d.to} (${KIND_NAME[d.kind] || d.kind})${d.cc && d.cc.length ? `, cc ${d.cc.join(", ")}` : ""}`, pv(`Q: ${d.preview}\nA: ${d.answer_preview}`));
     case "message": return h("div", { class: "ev message" }, `${who} → ${d.to}: message (${KIND_NAME[d.kind] || d.kind})${d.cc && d.cc.length ? `, cc ${d.cc.join(", ")}` : ""}`, pv(d.preview));
     case "wiki_write": return h("div", { class: "ev wiki" }, `${who} wrote ${d.wiki} / ${d.page}`, pv(d.preview));
@@ -892,7 +937,9 @@ function fmtEvent(ev) {
 async function startRun() {
   const cfg = S.runCfg;
   try {
-    const res = await api("/api/runs", { config: plain(S.config), task: cfg.task, seed: cfg.seed, budget: cfg.budget, mock: cfg.mock, confirm_spend: cfg.confirm });
+    const mission = cfg.task === "__mission" && !S.customTask ? cfg.mission : null;
+    const res = await api("/api/runs", { config: plain(S.config), task: mission ? null : cfg.task, mission, seed: cfg.seed, budget: cfg.budget, mock: cfg.mock, confirm_spend: cfg.confirm });
+    S.runOrders = null;
     S.run = { key: res.run, status: "running", states: {}, costs: {}, total_cost: 0, budget: cfg.budget, mock: cfg.mock, task: res.task, started: Date.now() / 1000, feed: [], next: 0 };
     S.collapsed.clear();
     renderAll();
@@ -904,7 +951,7 @@ async function pollRun() {
   let st;
   try { st = await api(`/api/runs/${r.key}?since=${r.next}`); } catch (e) { toast(e.message); return; }
   if (S.run !== r) return;
-  Object.assign(r, { status: st.status, states: st.states, costs: st.costs, total_cost: st.total_cost, summary: st.summary, error: st.error, started: st.started, next: st.next });
+  Object.assign(r, { status: st.status, states: st.states, costs: st.costs, total_cost: st.total_cost, summary: st.summary, error: st.error, started: st.started, next: st.next, run_id: st.run_id });
   const now = Date.now();
   for (const ev of st.events) {
     if (ev.type === "event") {
@@ -915,14 +962,17 @@ async function pollRun() {
       if (ev.kind === "ask" || ev.kind === "message") S.pings.push({ from: ev.node, to: d.to, until: now + 2200 });
     }
   }
-  if (st.status !== "running") r.finished = Date.now() / 1000;
+  if (st.status !== "running" && !r.finished) {
+    r.finished = Date.now() / 1000;
+    if (r.run_id) api(`/api/explorer/${r.run_id}/orders`).then((o) => { S.runOrders = o; if (S.tab === "position") renderPanel(); }).catch(() => {});
+  }
   renderChart();
   if (S.tab === "run") renderPanel();
   if (st.status === "running" || S.flashes.length || S.pings.length) setTimeout(pollRun, st.status === "running" ? 500 : 900);
 }
 
 
-/* ---------------- wiki browser ---------------- */
+/* ---------------- wiki rendering helpers ---------------- */
 const RANK_COLORS = ["#6250d6", "#2a78d6", "#1baf7a", "#eb6834", "#008300", "#e87ba4", "#b77900", "#e34948", "#52514e"];
 function rankColor(role) {
   if (role === "client") return "#8a8983";
@@ -990,47 +1040,130 @@ function diffLines(a, b) {
   return out;
 }
 
-async function openWikiBrowser() {
-  S.wb = S.wb || { source: null, data: null, inst: null, page: null, view: "page", rev: null, role: "" };
-  let archive = [];
-  try { archive = await api("/api/archive"); } catch (e) { toast(e.message); }
-  const sel = $("#wb-source");
-  const opts = [];
-  if (S.run && S.run.key) opts.push(h("option", { value: "live:" + S.run.key }, `Current run (${S.run.status}) · ${S.run.task}`));
-  archive.forEach((r) => opts.push(h("option", { value: "run:" + r.run_id },
-    `${r.run_id.replace("run_", "")} · ${r.org || "?"} · ${r.task || "?"} · ${r.pages} page${r.pages === 1 ? "" : "s"}, ${r.edits} edit${r.edits === 1 ? "" : "s"}`)));
-  if (!opts.length) opts.push(h("option", { value: "" }, "No wiki pages yet: run an org that has wikis"));
-  sel.replaceChildren(...opts);
-  if (!S.wb.source || ![...sel.options].some((o) => o.value === S.wb.source)) S.wb.source = sel.options[0].value;
-  sel.value = S.wb.source;
-  $("#wiki-dialog").showModal();
-  await loadWikiSource();
+/* ---------------- run explorer ---------------- */
+const STATUS_ICON = { submitted: "✓", "working…": "…", turn_limit: "⏱", error: "✗", refused: "✗", no_submit: "?" };
+async function openExplorer(tab, runId) {
+  S.ex = S.ex || { run: null, tab: "orders", orders: null, files: null, file: null, sel: 0, list: [] };
+  S.wb = S.wb || { data: null, inst: null, page: null, view: "page", rev: null, role: "" };
+  if (tab) S.ex.tab = tab;
+  try { S.ex.list = await api("/api/explorer/runs"); } catch (e) { toast(e.message); S.ex.list = []; }
+  const want = runId || (S.run && S.run.run_id) || S.ex.run;
+  if (want && S.ex.list.some((r) => r.run_id === want)) S.ex.run = want;
+  else if (!S.ex.list.some((r) => r.run_id === S.ex.run)) S.ex.run = S.ex.list[0] ? S.ex.list[0].run_id : null;
+  const sel = $("#ex-source");
+  sel.replaceChildren(...(S.ex.list.length ? S.ex.list.map((r) => h("option", { value: r.run_id },
+    `${r.status === "running" ? "● live · " : ""}${r.org || "?"} · ${r.task || "?"} · ${r.run_id.replace("run_", "")}`))
+    : [h("option", { value: "" }, "No runs yet: start one in the Manoeuvres tab")]));
+  sel.value = S.ex.run || "";
+  $("#explorer").showModal();
+  await loadExplorer(true);
 }
-async function loadWikiSource() {
-  const src = S.wb.source;
-  if (!src) { S.wb.data = null; return renderWikiBrowser(); }
-  try {
-    S.wb.data = src.startsWith("live:") ? await api(`/api/runs/${src.slice(5)}/wikis`) : await api(`/api/archive/${src.slice(4)}/wikis`);
-  } catch (e) { S.wb.data = null; toast(e.message); }
-  const insts = (S.wb.data && S.wb.data.instances) || [];
-  const all = insts.flatMap((i) => i.pages.map((p) => [i.id, p.title]));
-  if (!all.some(([i, t]) => i === S.wb.inst && t === S.wb.page)) {
-    const first = all.find(([i, t]) => t !== "Client brief") || all[0];
-    [S.wb.inst, S.wb.page] = first || [null, null]; S.wb.rev = null;
+const exRunInfo = () => (S.ex.list || []).find((r) => r.run_id === S.ex.run) || {};
+async function loadExplorer(reset) {
+  clearTimeout(S.ex.timer);
+  const rid = S.ex.run;
+  if (reset) { S.ex.orders = S.ex.files = S.ex.file = null; S.wb.data = null; S.ex.sel = 0; }
+  if (rid) {
+    try {
+      if (S.ex.tab === "orders") S.ex.orders = await api(`/api/explorer/${rid}/orders`);
+      else if (S.ex.tab === "files") {
+        S.ex.files = await api(`/api/explorer/${rid}/files`);
+        if (S.ex.file && S.ex.files.files.some((f) => f.path === S.ex.file.path)) S.ex.file = await api(`/api/explorer/${rid}/file?path=${encodeURIComponent(S.ex.file.path)}`);
+      } else {
+        S.wb.data = await api(`/api/explorer/${rid}/wikis`);
+        const insts = S.wb.data.instances || [];
+        const all = insts.flatMap((i) => i.pages.map((p) => [i.id, p.title]));
+        if (!all.some(([i, t]) => i === S.wb.inst && t === S.wb.page)) {
+          const first = all.find(([, t]) => t !== "Client brief") || all[0];
+          [S.wb.inst, S.wb.page] = first || [null, null]; S.wb.rev = null;
+        }
+      }
+    } catch (e) { toast(e.message); }
   }
-  renderWikiBrowser();
-  clearTimeout(S.wb.timer);
-  if (src.startsWith("live:") && $("#wiki-dialog").open && S.run && S.run.status === "running") S.wb.timer = setTimeout(loadWikiSource, 1500);
+  renderExplorer();
+  const live = exRunInfo().status === "running" || (S.run && S.run.run_id === rid && S.run.status === "running");
+  if (live && $("#explorer").open) S.ex.timer = setTimeout(() => loadExplorer(false), 1500);
 }
+function renderExplorer() {
+  document.querySelectorAll("#explorer .ex-tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === S.ex.tab));
+  $("#wb-role").hidden = S.ex.tab !== "wikis";
+  if (!S.ex.run) { $("#ex-nav").replaceChildren(h("p", { class: "muted" }, "Nothing to show yet.")); $("#ex-main").replaceChildren(); return; }
+  if (S.ex.tab === "orders") renderOrders();
+  else if (S.ex.tab === "files") renderFiles();
+  else renderWikiBrowser();
+}
+function orderChildren(data) {
+  const kids = {};
+  for (const o of data.orders) (kids[o.parent ?? "root"] = kids[o.parent ?? "root"] || []).push(o);
+  return kids;
+}
+function renderOrders() {
+  const data = S.ex.orders, nav = $("#ex-nav"), main = $("#ex-main");
+  if (!data || !data.orders.length) { nav.replaceChildren(h("p", { class: "muted" }, "No orders recorded yet.")); main.replaceChildren(); return; }
+  const kids = orderChildren(data), items = [];
+  const walk = (o, depth) => {
+    const st = o.report ? o.report.status : "working…";
+    items.push(h("button", { class: "wb-page ord" + (S.ex.sel === o.id ? " sel" : ""), style: `padding-left:${8 + depth * 16}px`,
+      onclick: () => { S.ex.sel = o.id; renderOrders(); } },
+      h("div", { class: "t" }, h("span", { class: "ord-st st-" + (o.report ? o.report.status : "open") }, STATUS_ICON[st] || "•"), " ",
+        o.id === 0 ? "Mission → " : "", o.to, " ", rankBadge(o.to_role || "?"), o.round > 1 ? h("span", { class: "muted small" }, ` round ${o.round}`) : null),
+      h("div", { class: "m" }, trunc((o.id === 0 && o.title) ? o.title : (o.text || "").replace(/^\[part[^\]]*\]\s*/, "").replace(/\s+/g, " "), 90))));
+    (kids[o.id] || []).forEach((c) => walk(c, depth + 1));
+  };
+  (kids.root || []).forEach((o) => walk(o, 0));
+  nav.replaceChildren(h("div", { class: "muted small", style: "margin-bottom:8px" }, `${data.orders.length} orders · ${data.status}`), ...items);
+
+  const o = data.orders.find((x) => x.id === S.ex.sel) || data.orders[0];
+  const parent = data.orders.find((x) => x.id === o.parent);
+  const children = kids[o.id] || [];
+  const goal = data.goals[o.to];
+  const out = [
+    h("h2", { style: "margin:0" }, o.id === 0 ? "The mission" : `Order #${o.id}`),
+    h("div", { class: "wb-meta" },
+      h("div", {}, h("strong", {}, o.from === "client" ? "You" : o.from), " ", o.from === "client" ? null : rankBadge(o.from_role || "?"),
+        " → ", h("strong", {}, o.to), " ", rankBadge(o.to_role || "?"), ` · issued at ${o.t.toFixed(1)}s`, o.round > 1 ? ` · rework round ${o.round}` : ""),
+      parent ? h("div", {}, "Part of ", h("span", { class: "linklike", onclick: () => { S.ex.sel = parent.id; renderOrders(); } },
+        parent.id === 0 ? "the mission" : `order #${parent.id} (${parent.from} → ${parent.to})`)) : null),
+  ];
+  if (goal) out.push(h("div", { class: "goal-box" }, h("strong", {}, `${o.to}'s standing goal: `), goal));
+  out.push(h("h3", {}, o.id === 0 ? "What you asked for" : "The order"), md(o.text));
+  if (children.length) {
+    out.push(h("h3", {}, `How ${o.to} split it up (${children.length} order${children.length > 1 ? "s" : ""})`));
+    out.push(h("div", { class: "split" }, children.map((c) => h("div", { class: "split-item", onclick: () => { S.ex.sel = c.id; renderOrders(); } },
+      h("div", {}, h("strong", {}, c.to), " ", rankBadge(c.to_role || "?"), c.round > 1 ? h("span", { class: "muted small" }, ` round ${c.round}`) : null,
+        h("span", { class: "muted small" }, `  ${c.report ? c.report.status : "working…"}`)),
+      h("div", { class: "small" }, trunc((c.text || "").replace(/^\[part[^\]]*\]\s*/, "").replace(/\s+/g, " "), 220))))));
+  } else if (!o.report) out.push(h("p", { class: "muted small" }, "Still working on it."));
+  if (o.report) {
+    out.push(h("h3", {}, o.id === 0 ? `Final report to you (${o.report.status})` : `Report back to ${o.from} (${o.report.status}, at ${o.report.t.toFixed(1)}s)`));
+    if (o.report.answer) out.push(h("p", {}, h("strong", {}, "Answer: "), o.report.answer));
+    out.push(md(o.report.text));
+  }
+  main.replaceChildren(...out);
+}
+function renderFiles() {
+  const data = S.ex.files, nav = $("#ex-nav"), main = $("#ex-main");
+  if (!data || !data.files.length) { nav.replaceChildren(h("p", { class: "muted" }, "The workspace is empty.")); main.replaceChildren(); return; }
+  nav.replaceChildren(h("div", { class: "muted small", style: "margin-bottom:8px" }, `${data.files.length} files in the workspace`),
+    ...data.files.map((f) => h("button", { class: "wb-page" + (S.ex.file && S.ex.file.path === f.path ? " sel" : ""),
+      onclick: async () => { try { S.ex.file = await api(`/api/explorer/${S.ex.run}/file?path=${encodeURIComponent(f.path)}`); renderFiles(); } catch (e) { toast(e.message); } } },
+      h("div", { class: "t" }, f.path), h("div", { class: "m" }, `${f.bytes.toLocaleString()} bytes`))));
+  const f = S.ex.file;
+  if (!f) { main.replaceChildren(h("p", { class: "muted" }, "Select a file.")); return; }
+  main.replaceChildren(h("h2", { style: "margin:0 0 6px" }, f.path),
+    h("div", { class: "wb-meta" }, `${f.bytes.toLocaleString()} bytes${f.truncated ? " (showing the first 300 KB)" : ""}`),
+    f.binary ? h("p", { class: "muted" }, "Binary file.") : /\.md$/i.test(f.path) ? md(f.text) : h("pre", { class: "code" }, f.text));
+}
+
 function renderWikiBrowser() {
-  const wb = S.wb, data = wb.data, nav = $("#wb-nav"), main = $("#wb-main");
+  const wb = S.wb, data = wb.data, nav = $("#ex-nav"), main = $("#ex-main");
   const insts = (data && data.instances) || [];
   const roles = [...new Set(insts.flatMap((i) => i.pages.flatMap((p) => p.revisions.map((r) => r.role))))];
   const rsel = $("#wb-role");
   rsel.replaceChildren(h("option", { value: "" }, "Edited by any rank"), ...roles.map((r) => h("option", { value: r }, `Edited by: ${titleCase(r)}`)));
   rsel.value = roles.includes(wb.role) ? wb.role : "";
   if (!data) { nav.replaceChildren(h("p", { class: "muted" }, "Nothing to show.")); main.replaceChildren(); return; }
-  const navItems = [h("div", { class: "muted small", style: "margin-bottom:8px" }, `${data.org || ""} · ${data.task || ""}`)];
+  const navItems = [];
   for (const inst of insts) {
     const pages = inst.pages.filter((p) => !wb.role || p.revisions.some((r) => r.role === wb.role));
     if (!pages.length) continue;
@@ -1045,7 +1178,7 @@ function renderWikiBrowser() {
           h("div", { class: "m" }, `v${cur.version} · ${cur.author} `, rankBadge(cur.role), ` · ${editors} editor${editors > 1 ? "s" : ""}`));
       })));
   }
-  if (navItems.length === 1) navItems.push(h("p", { class: "muted" }, wb.role ? "No pages edited by that rank." : "No pages yet."));
+  if (!navItems.length) navItems.push(h("p", { class: "muted" }, wb.role ? "No pages edited by that rank." : "No wiki pages in this run."));
   nav.replaceChildren(...navItems);
 
   const inst = insts.find((i) => i.id === wb.inst);
@@ -1102,6 +1235,105 @@ function renderWikiBrowser() {
   main.replaceChildren(...out);
 }
 
+
+/* ---------------- models & endpoints ---------------- */
+async function openModels() {
+  try { S.md = await api("/api/models"); } catch (e) { return toast(e.message); }
+  S.mdForm = S.mdForm || { ep: { name: "", type: "openai", base_url: "", api_key_env: "", effort_style: "none", max_tokens_param: "max_tokens" },
+    model: { alias: "", endpoint: "openrouter", model: "", input: "", output: "" } };
+  S.mdTests = S.mdTests || {};
+  $("#models-dialog").showModal();
+  renderModels();
+}
+async function saveLocalModels() {
+  try {
+    S.md = await api("/api/models/local", { endpoints: S.md.local.endpoints, models: S.md.local.models });
+    S.catalog = await api("/api/catalog");
+    renderModels(); renderAll(); toast("Saved to configs/models.local.yaml");
+  } catch (e) { toast(e.message); }
+}
+async function testModel(alias) {
+  const m = S.md.models.find((x) => x.alias === alias);
+  if (m && !m.local && m.kind !== "mock" && !confirm(`Make one short real call to ${alias} (${m.endpoint})? It costs a fraction of a cent.`)) return;
+  S.mdTests[alias] = { pending: true }; renderModels();
+  try { S.mdTests[alias] = await api("/api/models/test", { model: alias }); } catch (e) { S.mdTests[alias] = { ok: false, error: e.message }; }
+  renderModels();
+}
+function dropLocal(kind, name) {
+  // remove one entry from the local overrides, then save
+  const bucket = S.md.local[kind];
+  S.md.local[kind] = Object.fromEntries(Object.entries(bucket).filter(([k]) => k !== name));
+  saveLocalModels();
+}
+function renderModels() {
+  const d = S.md, f = S.mdForm, out = [];
+  const inp = (obj, key, attrs = {}) => h("input", { type: "text", value: obj[key] ?? "", ...attrs, oninput: (e) => (obj[key] = e.target.value) });
+  const sel = (obj, key, opts) => { const e = h("select", { onchange: (ev) => (obj[key] = ev.target.value) }, opts.map((o) => h("option", { value: o }, o))); e.value = obj[key]; return e; };
+  out.push(h("h3", {}, "Endpoints"));
+  out.push(h("p", { class: "small" }, "Where models are served. ", h("code", {}, "openai"), " covers any OpenAI-compatible server (vLLM, LM Studio, llama.cpp, Together, Groq, Gemini's OpenAI endpoint, LiteLLM...); ",
+    h("code", {}, "anthropic"), " covers the Anthropic API and compatible gateways."));
+  const et = h("table", {}, h("tr", {}, ["name", "type", "base URL", "API key", "from", ""].map((c) => h("th", {}, c))));
+  for (const e of d.endpoints) {
+    const local = e.source === "local";
+    et.append(h("tr", {}, h("td", {}, h("strong", {}, e.name)), h("td", {}, e.type), h("td", {}, h("code", {}, e.base_url || "(default)")),
+      h("td", {}, e.api_key_env ? h("span", { class: e.key_present ? "ok" : "bad" }, `${e.api_key_env} ${e.key_present ? "✓" : "✗ not set"}`) : "none needed"),
+      h("td", {}, e.source),
+      h("td", {}, local ? [h("button", { class: "icon", onclick: () => { Object.assign(f.ep, { name: e.name, ...d.local.endpoints[e.name] }); renderModels(); } }, "Edit"), " ",
+        h("button", { class: "icon danger", title: "Remove", onclick: () => dropLocal("endpoints", e.name) }, "✕")] : null)));
+  }
+  out.push(et);
+  out.push(h("div", { class: "form" },
+    h("label", {}, "Name", inp(f.ep, "name", { placeholder: "e.g. vllm" })),
+    h("label", {}, "Type", sel(f.ep, "type", ["openai", "anthropic"])),
+    h("label", {}, "Base URL", inp(f.ep, "base_url", { placeholder: "http://gpu-box:8000/v1" })),
+    h("label", {}, "Key env var", inp(f.ep, "api_key_env", { placeholder: "e.g. VLLM_API_KEY (blank = none)" })),
+    h("label", {}, "Reasoning effort", sel(f.ep, "effort_style", ["none", "openai", "openrouter"])),
+    h("label", {}, "Max-tokens field", sel(f.ep, "max_tokens_param", ["max_tokens", "max_completion_tokens"])),
+    h("button", { class: "primary", onclick: () => {
+      const name = (f.ep.name || "").trim();
+      if (!/^[A-Za-z0-9_-]+$/.test(name)) return toast("Endpoint name: letters, digits, - and _");
+      const cfg = { type: f.ep.type };
+      if (f.ep.base_url) cfg.base_url = f.ep.base_url.trim();
+      cfg.api_key_env = f.ep.api_key_env ? f.ep.api_key_env.trim() : null;
+      if (f.ep.effort_style !== "none") cfg.effort_style = f.ep.effort_style;
+      if (f.ep.max_tokens_param !== "max_tokens") cfg.max_tokens_param = f.ep.max_tokens_param;
+      d.local.endpoints[name] = cfg; saveLocalModels();
+    } }, "Save endpoint")));
+
+  out.push(h("h3", {}, "Models"));
+  out.push(h("p", { class: "small" }, "An alias for an endpoint plus model id. Set prices for paid endpoints so the budget guard can cap spending. Any position can also use ",
+    h("code", {}, "endpoint:model-id"), " directly."));
+  const mt = h("table", {}, h("tr", {}, ["alias", "endpoint", "model id", "$ in / out per M", "from", ""].map((c) => h("th", {}, c))));
+  for (const m of d.models) {
+    const local = m.source === "local", t = S.mdTests[m.alias];
+    mt.append(h("tr", {}, h("td", {}, h("strong", {}, m.alias)), h("td", {}, m.endpoint), h("td", {}, h("code", {}, m.model)),
+      h("td", {}, m.kind === "mock" ? "offline" : m.local ? "local (free)" : m.price_known ? `${m.input} / ${m.output}` : h("span", { class: "bad" }, "unknown")),
+      h("td", {}, m.source),
+      h("td", {}, h("button", { class: "icon", onclick: () => testModel(m.alias) }, "Test"), " ",
+        local ? [h("button", { class: "icon", onclick: () => { const c = d.local.models[m.alias]; Object.assign(f.model, { alias: m.alias, endpoint: c.endpoint, model: c.model, input: c.price ? c.price.input : "", output: c.price ? c.price.output : "" }); renderModels(); } }, "Edit"), " ",
+          h("button", { class: "icon danger", title: "Remove", onclick: () => dropLocal("models", m.alias) }, "✕")] : null)));
+    if (t) mt.append(h("tr", {}, h("td", { colspan: 6, class: "small" }, t.pending ? "testing…" : t.ok
+      ? h("span", { class: "ok" }, `OK in ${t.latency_s}s · replied ${JSON.stringify(t.text)} · ${t.input_tokens} in / ${t.output_tokens} out · $${Number(t.cost_usd).toFixed(6)} · served by ${t.served_model}`)
+      : h("span", { class: "bad" }, `Failed: ${t.error}`))));
+  }
+  out.push(mt);
+  out.push(h("div", { class: "form" },
+    h("label", {}, "Alias", inp(f.model, "alias", { placeholder: "e.g. qwen-local" })),
+    h("label", {}, "Endpoint", sel(f.model, "endpoint", d.endpoints.map((e) => e.name))),
+    h("label", {}, "Model id", inp(f.model, "model", { placeholder: "e.g. qwen3:8b" })),
+    h("label", {}, "$ input / M tokens", inp(f.model, "input", { placeholder: "blank = free/unknown" })),
+    h("label", {}, "$ output / M tokens", inp(f.model, "output", { placeholder: "" })),
+    h("button", { class: "primary", onclick: () => {
+      const alias = (f.model.alias || "").trim();
+      if (!alias || !f.model.model) return toast("Give an alias and a model id");
+      const cfg = { endpoint: f.model.endpoint, model: f.model.model.trim() };
+      if (f.model.input !== "" || f.model.output !== "") cfg.price = { input: Number(f.model.input) || 0, output: Number(f.model.output) || 0 };
+      d.local.models[alias] = cfg; saveLocalModels();
+    } }, "Save model")));
+  out.push(h("p", { class: "small muted" }, `Local file: ${d.local_path}`));
+  $("#md-body").replaceChildren(...out);
+}
+
 /* ---------------- org files ---------------- */
 async function refreshOrgs() {
   S.orgs = await api("/api/orgs");
@@ -1127,7 +1359,7 @@ function loadConfig(config, analysis) {
 }
 async function newOrg() {
   try {
-    const res = await api("/api/generate", { name: "nouvelle-compagnie", workers: 3, depth: 1, ladder: [{ model: "sonnet", effort: "low" }], worker: { model: defaultWorker().model } });
+    const res = await api("/api/generate", { name: "new-company", workers: 3, depth: 1, ladder: [{ model: "sonnet", effort: "low" }], worker: { model: defaultWorker().model } });
     loadConfig(res.config, res.analysis); S.file = null; await refreshOrgs(); S.tab = "structure"; renderAll();
   } catch (e) { toast(e.message); }
 }
@@ -1188,10 +1420,13 @@ function bindUI() {
   $("#btn-new").onclick = newOrg;
   $("#btn-save").onclick = save;
   $("#btn-undo").onclick = undo; $("#btn-redo").onclick = redo;
-  $("#btn-wikis").onclick = openWikiBrowser;
-  $("#wb-close").onclick = () => { clearTimeout(S.wb && S.wb.timer); $("#wiki-dialog").close(); };
-  $("#wb-refresh").onclick = loadWikiSource;
-  $("#wb-source").onchange = (e) => { S.wb.source = e.target.value; S.wb.inst = null; loadWikiSource(); };
+  $("#btn-explorer").onclick = () => openExplorer();
+  $("#btn-models").onclick = openModels;
+  $("#md-close").onclick = () => $("#models-dialog").close();
+  $("#ex-close").onclick = () => { clearTimeout(S.ex && S.ex.timer); $("#explorer").close(); };
+  $("#ex-refresh").onclick = () => loadExplorer(false);
+  $("#ex-source").onchange = (e) => { S.ex.run = e.target.value; S.wb.inst = null; loadExplorer(true); };
+  document.querySelectorAll("#explorer .ex-tabs button").forEach((b) => (b.onclick = () => { S.ex.tab = b.dataset.tab; loadExplorer(false); }));
   $("#wb-role").onchange = (e) => { S.wb.role = e.target.value; renderWikiBrowser(); };
   $("#btn-yaml").onclick = () => { $("#yaml-text").value = S.analysis ? S.analysis.yaml : ""; $("#yaml-dialog").showModal(); };
   $("#yaml-copy").onclick = async () => { try { await navigator.clipboard.writeText($("#yaml-text").value); toast("Copied"); } catch (_) { $("#yaml-text").select(); } };
@@ -1217,7 +1452,7 @@ async function init() {
     S.catalog = await api("/api/catalog");
     await refreshOrgs();
     bindCanvas(); bindUI();
-    const pick = S.orgs.find((o) => o.file === "grande-armee") || S.orgs.find((o) => !o.error);
+    const pick = S.orgs.find((o) => o.file === "field-army") || S.orgs.find((o) => !o.error);
     if (pick) await openOrg(pick.file); else await newOrg();
   } catch (e) { banner(e.message); }
 }

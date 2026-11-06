@@ -47,6 +47,11 @@ class RunContext:
     totals: Counter = field(default_factory=Counter)
     per_node: dict = field(default_factory=lambda: defaultdict(Counter))
     _contacts: dict = field(default_factory=dict)
+    _orders: int = 0
+
+    def next_order(self) -> int:
+        self._orders += 1
+        return self._orders
 
     def bind(self, root: Agent) -> None:
         self.agents = {a.name: a for a in root.walk()}
@@ -131,8 +136,13 @@ async def run_one(
     started, t0 = time.time(), time.monotonic()
     status, error, submission, fatal = "completed", None, None, None
     try:
+        ctx.event(root, "mission", {"order_id": 0, "to": root.name, "to_role": root.spec.role, "title": task.title,
+                                    "text": task.brief, "family": task.family})
         async with asyncio.timeout(timeout_s):
-            submission = await root.handle(root_message(task), ctx)
+            submission = await root.handle(root_message(task), ctx, order_id=0)
+        ctx.event(root, "report", {"to": "client", "order_id": 0, "status": submission["status"],
+                                   "text": submission["report"], "answer": submission.get("answer"),
+                                   "chars": len(submission["report"]), "preview": submission["report"][:240]})
         if submission["status"] != "submitted":
             status = submission["status"]
     except* RunBudgetExceeded as eg:

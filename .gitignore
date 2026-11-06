@@ -5,3 +5,4 @@ __pycache__/
 .cache/
 results/
 .pytest_cache/
+configs/models.local.yaml

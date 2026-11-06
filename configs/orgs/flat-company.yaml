@@ -1,0 +1,10 @@
+# Flat: one captain commanding every private directly.
+name: flat-company
+description: Sonnet captain commanding 6 cheap privates directly
+levels:
+  - role: captain
+    model: sonnet
+    effort: low
+    span: 6
+  - role: private
+    model: gpt-oss-120b

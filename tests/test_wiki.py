@@ -17,26 +17,26 @@ from swarmy.wiki import WikiStore, load, render_markdown
 
 def _org():
     return OrgConfig.model_validate({"name": "w", "levels": [
-        {"role": "colonel", "model": "haiku", "span": 2}, {"role": "mousquetaire", "model": "haiku"}],
-        "knowledge": {"wikis": [{"name": "ordres", "scope": "org"}]}})
+        {"role": "colonel", "model": "haiku", "span": 2}, {"role": "private", "model": "haiku"}],
+        "knowledge": {"wikis": [{"name": "orders", "scope": "org"}]}})
 
 
 def test_revisions_record_author_rank_and_mode():
     store = WikiStore(wiki_instances(_org()))
-    store.write("ordres", "Plan", "step 1", author="colonel", role="colonel", level=0, model="haiku")
-    store.write("ordres", "plan", "step 2", author="mousquetaire-1", role="mousquetaire", level=1, model="haiku",
+    store.write("orders", "Plan", "step 1", author="colonel", role="colonel", level=0, model="haiku")
+    store.write("orders", "plan", "step 2", author="private-1", role="private", level=1, model="haiku",
                 append=True)
-    store.write("ordres", "Plan", "rewritten", author="mousquetaire-2", role="mousquetaire", level=1, model="haiku")
-    page = store.find("ordres", "PLAN")
+    store.write("orders", "Plan", "rewritten", author="private-2", role="private", level=1, model="haiku")
+    page = store.find("orders", "PLAN")
     assert [r.mode for r in page.revisions] == ["create", "append", "replace"]
     assert page.revisions[1].content == "step 1\n\nstep 2"
-    assert page.current.author == "mousquetaire-2" and page.current.role == "mousquetaire"
-    assert page.contributors() == [("colonel", "colonel", 1), ("mousquetaire-1", "mousquetaire", 1),
-                                   ("mousquetaire-2", "mousquetaire", 1)]
-    assert "last edited by mousquetaire-2 (mousquetaire, level 1)" in page.byline()
+    assert page.current.author == "private-2" and page.current.role == "private"
+    assert page.contributors() == [("colonel", "colonel", 1), ("private-1", "private", 1),
+                                   ("private-2", "private", 1)]
+    assert "last edited by private-2 (private, level 1)" in page.byline()
     data = store.to_json()
     md = render_markdown(data["instances"][0], data["instances"][0]["pages"][0])
-    assert "| 2 |" in md and "mousquetaire-1 | mousquetaire | 1 | haiku | append" in md
+    assert "| 2 |" in md and "private-1 | private | 1 | haiku | append" in md
 
 
 def _mock_run(org, tmp_path):
@@ -51,16 +51,16 @@ def _mock_run(org, tmp_path):
 
 
 def test_run_saves_wiki_history_and_agents_see_ranks(tmp_path):
-    org = load_org(CONFIG_DIR / "orgs" / "etat-major.yaml")
+    org = load_org(CONFIG_DIR / "orgs" / "general-staff.yaml")
     s = _mock_run(org, tmp_path)
     run_dir = tmp_path / "runs" / s["run_id"]
     data = load(run_dir)
-    ordres = next(i for i in data["instances"] if i["id"] == "ordres")
-    titles = {p["title"]: p for p in ordres["pages"]}
+    orders = next(i for i in data["instances"] if i["id"] == "orders")
+    titles = {p["title"]: p for p in orders["pages"]}
     assert titles["Client brief"]["revisions"][0]["author"] == "client"
     plan = titles["Plan"]["revisions"]
-    assert {r["role"] for r in plan} <= {"maréchal", "colonel"} and all(r["level"] in (0, 1) for r in plan)
-    assert (run_dir / "wikis" / "ordres" / "Plan.md").read_text().count("| ") > 5
+    assert {r["role"] for r in plan} <= {"field-marshal", "colonel"} and all(r["level"] in (0, 1) for r in plan)
+    assert (run_dir / "wikis" / "orders" / "Plan.md").read_text().count("| ") > 5
     # what an agent reads includes the byline and contributors with their ranks
     transcript = (run_dir / "transcript.jsonl").read_text().splitlines()
     reads = [json.loads(l) for l in transcript if '"tool": "wiki_read"' in l]
@@ -72,10 +72,10 @@ def test_run_saves_wiki_history_and_agents_see_ranks(tmp_path):
 
 
 def test_cli_wiki(tmp_path, capsys):
-    _mock_run(load_org(CONFIG_DIR / "orgs" / "etat-major.yaml"), tmp_path)
+    _mock_run(load_org(CONFIG_DIR / "orgs" / "general-staff.yaml"), tmp_path)
     assert main(["--results", str(tmp_path), "wiki"]) == 0
     out = capsys.readouterr().out
-    assert "ordres  (whole organization)" in out and "[colonel]" in out
-    assert main(["--results", str(tmp_path), "wiki", "--wiki", "ordres", "--page", "Plan"]) == 0
+    assert "orders  (whole organization)" in out and "[colonel]" in out
+    assert main(["--results", str(tmp_path), "wiki", "--wiki", "orders", "--page", "Plan"]) == 0
     out = capsys.readouterr().out
     assert "## Revision history" in out and "| rank |" in out

@@ -7,7 +7,9 @@ import time
 
 import anthropic
 
-from ..catalog import ModelSpec
+import os
+
+from ..catalog import Endpoint, ModelSpec
 from .base import (
     PENDING_RESULT,
     Conversation,
@@ -81,10 +83,22 @@ class AnthropicConversation(Conversation):
 class AnthropicProvider(Provider):
     name = "anthropic"
 
-    def __init__(self, retry: RetryPolicy | None = None):
+    def __init__(self, endpoint: Endpoint | None = None, retry: RetryPolicy | None = None):
         # Retries are handled here (not by the SDK) so that time spent waiting on
         # rate limits can be measured separately from model latency.
-        self.client = anthropic.AsyncAnthropic(max_retries=0, timeout=900)
+        kwargs: dict = {"max_retries": 0, "timeout": endpoint.timeout_s if endpoint else 900}
+        if endpoint is not None:
+            if endpoint.base_url:
+                kwargs["base_url"] = endpoint.base_url
+            if endpoint.api_key_env and os.environ.get(endpoint.api_key_env):
+                kwargs["api_key"] = os.environ[endpoint.api_key_env]
+            if endpoint.headers:
+                kwargs["default_headers"] = endpoint.headers
+        try:
+            self.client = anthropic.AsyncAnthropic(**kwargs)
+        except Exception as e:  # e.g. no credentials found anywhere
+            raise FatalProviderError(f"cannot create Anthropic client for endpoint "
+                                     f"{endpoint.name if endpoint else 'anthropic'!r}: {e}") from e
         self.retry = retry or RetryPolicy()
 
     def new_conversation(self, system: str, tools: list[ToolSpec]) -> AnthropicConversation:

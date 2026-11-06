@@ -1,12 +1,12 @@
 name: regiment
-description: Sonnet colonel -> 2 Haiku capitaines -> 3 mousquetaires each
+description: Sonnet colonel -> 2 Haiku captains -> 3 privates each
 levels:
   - role: colonel
     model: sonnet
     effort: low
     span: 2
-  - role: capitaine
+  - role: captain
     model: haiku
     span: 3
-  - role: mousquetaire
+  - role: private
     model: gpt-oss-120b

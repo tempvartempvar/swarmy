@@ -1,43 +1,65 @@
-# Model catalog. Org configs refer to models by these aliases.
+# Endpoints and models. Org configs refer to models by these aliases.
 #
-# You can also skip the catalog and write a model inline in any org config:
-#   model: openrouter:qwen/qwen3.7-flash      (price fetched live from OpenRouter)
-#   model: anthropic:claude-sonnet-5-5        (price copied from the matching entry below)
+# ENDPOINTS are where models are served. Built in (see swarmy/catalog.py):
+#   anthropic   Anthropic Messages API                     key: ANTHROPIC_API_KEY
+#   openrouter  OpenRouter (OpenAI-compatible)             key: OPENROUTER_API_KEY
+#   openai      OpenAI                                     key: OPENAI_API_KEY
+#   ollama      local Ollama at http://localhost:11434/v1  no key
+#   mock        offline scripted models
+# Add your own below (or in the designer: Models dialog, which writes configs/models.local.yaml).
+# `type: openai` covers any server that speaks OpenAI chat completions with tool calling:
+# vLLM, LM Studio, llama.cpp server, Together, Groq, Fireworks, Gemini's OpenAI endpoint, LiteLLM...
+# `type: anthropic` with a base_url covers Anthropic-compatible gateways and proxies.
+# Keys never go in this file: name the environment variable that holds them (put it in .env).
 #
-# Prices are USD per million tokens. Anthropic list prices as of 2026-10; OpenRouter prices
-# were snapshotted on 2026-11-03 - run `swarmy models check` to compare against live prices.
-# OpenRouter responses report the real charge, which is what gets logged; these prices are
-# used for the per-call budget guard.
+# MODELS: an alias -> endpoint + model id + price (USD per million tokens; used by the budget
+# guard, so set it for paid endpoints). Or skip the catalog and write a model inline in any org
+# config as <endpoint>:<model-id>, e.g. `ollama:qwen3:8b` or `openrouter:qwen/qwen3.7-flash`
+# (OpenRouter prices are looked up live).
 #
-# Fields:
-#   provider          anthropic | openrouter | mock
-#   model             provider's model id
-#   price             input / output / cache_read / cache_write (+ optional long-context tier)
-#   max_concurrency   simultaneous requests to this model across the whole sweep
-#   rpm               client-side requests-per-minute limit (use for :free models)
-#   refusal_fallback  Anthropic only: send `fallbacks: "default"` so a safety refusal is
-#                     re-run on a fallback model. Fallback calls are flagged in the log.
-#   thinking          Anthropic only: adaptive | omit
-#   effort_levels     which effort values the model accepts (others are mapped down)
+# Model fields: endpoint, model, price {input, output, cache_read, cache_write, long-context tier},
+# max_concurrency, rpm, effort_levels, and for anthropic endpoints refusal_fallback / thinking.
+# Prices: Anthropic list prices as of 2026-10; OpenRouter snapshot 2026-11-03 (`swarmy models check`).
+
+endpoints:
+  # vllm:
+  #   type: openai
+  #   base_url: http://gpu-box:8000/v1
+  #   api_key_env: VLLM_API_KEY        # or omit / null if the server needs no key
+  # lmstudio:
+  #   type: openai
+  #   base_url: http://localhost:1234/v1
+  # gemini:
+  #   type: openai
+  #   base_url: https://generativelanguage.googleapis.com/v1beta/openai
+  #   api_key_env: GEMINI_API_KEY
+  #   effort_style: openai             # send reasoning effort as `reasoning_effort`
+  # claude-gateway:
+  #   type: anthropic
+  #   base_url: https://llm-gateway.example.com/anthropic
+  #   api_key_env: GATEWAY_KEY
+  #   headers: {X-Team: research}
+  # Other options: extra_body, tools_extra_body (merged into requests), max_tokens_param
+  # (max_tokens | max_completion_tokens), live_pricing, max_concurrency, timeout_s.
 
 models:
   # ---------------- Anthropic (direct API) ----------------
   opus:
-    provider: anthropic
+    endpoint: anthropic
     model: claude-opus-5-5
     price: {input: 4.00, output: 20.00, cache_read: 0.20, cache_write: 5.00}
     max_concurrency: 6
     refusal_fallback: true
 
   sonnet:
-    provider: anthropic
+    endpoint: anthropic
     model: claude-sonnet-5-5
     price: {input: 2.00, output: 10.00, cache_read: 0.20, cache_write: 2.50}
     max_concurrency: 8
     refusal_fallback: true
 
   haiku:
-    provider: anthropic
+    endpoint: anthropic
     model: claude-haiku-5-5
     # $0.10/$0.50 for prompts up to 100K tokens, $0.50/$2.50 beyond.
     # Cache prices assume the standard 0.1x read / 1.25x write multipliers - verify on the pricing page.
@@ -57,14 +79,14 @@ models:
   # real sweep will hit the daily cap; use the cheap paid models below for sweeps.
   # Free endpoints may log prompts. Don't send anything sensitive.
   gemma-free:
-    provider: openrouter
+    endpoint: openrouter
     model: google/gemma-4-31b-it:free
     price: {input: 0, output: 0}
     max_concurrency: 2
     rpm: 16
 
   nemotron-free:
-    provider: openrouter
+    endpoint: openrouter
     model: nvidia/nemotron-3.5-lightning:free
     price: {input: 0, output: 0}
     max_concurrency: 2
@@ -72,32 +94,43 @@ models:
 
   # ---------------- OpenRouter: cheap paid (tool-capable) ----------------
   gpt-oss-120b:
-    provider: openrouter
+    endpoint: openrouter
     model: openai/gpt-oss-120b
     price: {input: 0.025, output: 0.092}
     max_concurrency: 16
 
   qwen-flash:
-    provider: openrouter
+    endpoint: openrouter
     model: qwen/qwen3.7-flash
     price: {input: 0.03, output: 0.13}
     max_concurrency: 16
 
   deepseek-flash:
-    provider: openrouter
+    endpoint: openrouter
     model: deepseek/deepseek-v4.1-flash
     price: {input: 0.045, output: 0.50}
     max_concurrency: 16
 
   # Claude through OpenRouter, for anyone who only has an OpenRouter key.
   haiku-or:
-    provider: openrouter
+    endpoint: openrouter
     model: anthropic/claude-haiku-5.5
     price: {input: 0.10, output: 0.50}
     max_concurrency: 8
 
+  # ---------------- OpenAI (direct) ----------------
+  gpt-5-nano:
+    endpoint: openai
+    model: gpt-5-nano
+    price: {input: 0.05, output: 0.40}
+
+  # ---------------- Local (free; uncomment after `ollama pull <model>`) ----------------
+  # qwen-local:
+  #   endpoint: ollama
+  #   model: qwen3:8b
+
   # ---------------- Offline ----------------
   mock:
-    provider: mock
+    endpoint: mock
     model: mock
     price: {input: 0, output: 0}

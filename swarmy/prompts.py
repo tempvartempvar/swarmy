@@ -23,20 +23,26 @@ def org_shape_line(ctx: "RunContext") -> str:
 
 
 def _reports_line(agent: "Agent", ctx: "RunContext") -> str:
-    kids = agent.children
-    roles = Counter(c.spec.role for c in kids)
-    role_txt = ", ".join(f"{r}" if n == len(kids) else f"{n} {r}" for r, n in roles.items())
-    line = f"- Your direct reports ({role_txt}): {', '.join(c.name for c in kids)}."
-    managers = [c for c in kids if c.children]
-    if managers and len(managers) == len(kids):
-        line += " Each of them manages their own team."
-    elif managers:
-        line += f" Of these, {', '.join(c.name for c in managers)} manage their own teams; the rest do hands-on work."
-    else:
-        line += " They do the hands-on work."
-    if ctx.org.disclose_models:
-        line += " Models: " + ", ".join(f"{c.name}={c.spec.model}" for c in kids) + "."
-    return line
+    return f"- Your direct subordinates: {', '.join(c.name for c in agent.children)} (details under 'Your forces')."
+
+
+def _forces(agent: "Agent", ctx: "RunContext") -> list[str]:
+    """What each direct subordinate brings, so commanders can assign work to fit their resources."""
+    lines = ["", "## Your forces"]
+    for c in agent.children:
+        below = sum(1 for _ in c.walk()) - 1
+        hands = sum(1 for x in c.walk() if not x.children)
+        desc = f"- {c.name} ({c.spec.role})"
+        if ctx.org.disclose_models:
+            desc += f": model {c.model.model}" + (f", effort {c.spec.effort}" if c.spec.effort else "")
+        desc += (f"; commands {below} position{'s' if below != 1 else ''} below, {hands} doing hands-on work"
+                 if c.children else "; does hands-on work")
+        if c.spec.can_do_work and c.children:
+            desc += "; can also work hands-on"
+        if c.spec.goal:
+            desc += f". Standing goal: {c.spec.goal}"
+        lines.append(desc)
+    return lines
 
 
 def system_prompt(agent: "Agent", ctx: "RunContext") -> str:
@@ -57,6 +63,12 @@ def system_prompt(agent: "Agent", ctx: "RunContext") -> str:
         lines.append(_reports_line(agent, ctx))
     else:
         lines.append("- You have no direct reports: you do the hands-on work yourself.")
+    if lvl.goal:
+        lines += ["", "## Your standing goal", lvl.goal.strip(),
+                  "Pursue it alongside the orders you receive. If an order conflicts with it, follow the order "
+                  "and say so in your report."]
+    if is_manager:
+        lines += _forces(agent, ctx)
 
     lines += ["", "## How you work"]
     if is_manager:
@@ -68,8 +80,9 @@ def system_prompt(agent: "Agent", ctx: "RunContext") -> str:
             "- Your reports only see what you send them (and any wiki pages they can read). Make each assignment "
             "self-contained: include every detail they need (exact names, specifications, formats, file paths, what "
             "to report back).",
-            "- Split the work so reports can proceed in parallel without overlapping. Put several assignments in one "
-            "`delegate` call; they run at the same time and you get all reports back together.",
+            "- Split the work to fit your forces: give larger or harder parts to subordinates with bigger commands "
+            "or stronger models, and let them proceed in parallel without overlapping. Put several assignments in "
+            "one `delegate` call; they run at the same time and you get all reports back together.",
             "- Check what comes back. If something is missing, inconsistent or wrong, delegate follow-up work.",
         ]
         if lvl.review_tools and task.has_workspace:

@@ -1,7 +1,7 @@
 # Structure only: every agent runs the SAME model (Haiku), so differences come from the
 # shape of the org, not from model mix. Cheap enough for several seeds within $5.
 name: structure-control
-description: same model at every rank; 4 mousquetaires; depth 0-3 plus a company-notebook variant
+description: same model at every rank; 4 privates; depth 0-3 plus a company-log variant
 budget_usd: 5.0
 concurrency: 3
 orgs:

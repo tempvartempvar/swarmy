@@ -87,7 +87,7 @@ def openrouter_tool_call(name: str, args: dict, cost: float = 0.00012) -> bytes:
             "role": "assistant", "content": "",
             "tool_calls": [{"id": f"call_{name}", "type": "function",
                             "function": {"name": name, "arguments": json.dumps(args)}}]}}],
-        "usage": {"prompt_tokens": 900, "completion_tokens": 60, "cost": cost,
+        "usage": {"prompt_tokens": 900, "completion_tokens": 60, **({"cost": cost} if cost is not None else {}),
                   "prompt_tokens_details": {"cached_tokens": 100}},
     }).encode()
 

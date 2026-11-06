@@ -1,20 +1,20 @@
-# Same shape as regiment, but each company keeps a shared notebook (wiki) and
-# musketeers in the same company can message each other.
+# Same shape as regiment, but each company keeps a shared log (wiki) and
+# privates in the same company can message each other.
 name: regiment-mess
-description: regiment with company notebooks and messaging between comrades
+description: regiment with company logs and messaging between comrades
 levels:
   - role: colonel
     model: sonnet
     effort: low
     span: 2
-  - role: capitaine
+  - role: captain
     model: haiku
     span: 3
-  - role: mousquetaire
+  - role: private
     model: gpt-oss-120b
 knowledge:
   wikis:
-    - {name: carnet, scope: team, description: "The company's shared notebook."}
+    - {name: unit-log, scope: team, description: "The company's shared log."}
 communication:
   peers: true
   modes: [message]

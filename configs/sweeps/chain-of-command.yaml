@@ -1,21 +1,21 @@
-# The grande-armée model ladder, flattened step by step at a fixed 8 mousquetaires.
-# Depth 4 = full chain of command (connétable -> maréchal -> colonels -> capitaines -> mousquetaires);
-# lower depths remove ranks from the middle, keeping the connétable on top.
-# An Opus max-effort connétable is expensive, so $5 buys only one task across the four shapes.
-# For more data per dollar, set the connétable's effort to high (or use --budget).
+# The field-army model ladder, flattened step by step at a fixed 8 privates.
+# Depth 4 = full chain of command (field marshal -> general -> colonels -> captains -> privates);
+# lower depths remove ranks from the middle, keeping the field marshal on top.
+# An Opus max-effort field marshal is expensive, so $5 buys only one task across the four shapes.
+# For more data per dollar, set the field marshal's effort to high (or use --budget).
 name: chain-of-command
 budget_usd: 5.0
 concurrency: 2
 orgs:
   - generate:
-      name: armee
+      name: army
       workers: 8
       depths: [1, 2, 3, 4]
       ladder:
-        - {role: connétable, model: opus, effort: max}
-        - {role: maréchal, model: opus, effort: medium}
+        - {role: field-marshal, model: opus, effort: max}
+        - {role: general, model: opus, effort: medium}
         - {role: colonel, model: sonnet, effort: medium}
-        - {role: capitaine, model: haiku}
+        - {role: captain, model: haiku}
       worker: {model: gpt-oss-120b}
 tasks:
   - {family: mixed, params: {products: 6, cities: 4}, seeds: [1]}

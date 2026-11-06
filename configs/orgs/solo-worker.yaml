@@ -1,5 +1,5 @@
-# Baseline: a lone franc-tireur on a cheap model, no chain of command.
+# Baseline: a lone wolf on a cheap model, no chain of command.
 name: solo-worker
 levels:
-  - role: franc-tireur
+  - role: lone-wolf
     model: gpt-oss-120b

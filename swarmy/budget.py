@@ -31,8 +31,8 @@ class RunBudget:
         if self.cap is None:
             return desired_max_tokens
         remaining = self.cap - self.spent
-        in_cost = est_input_tokens * spec.price.worst_case_input_rate(est_input_tokens)
-        _, out_rate, _, _ = spec.price.rates(est_input_tokens)
+        in_cost = est_input_tokens * spec.rate.worst_case_input_rate(est_input_tokens)
+        _, out_rate, _, _ = spec.rate.rates(est_input_tokens)
         if out_rate == 0:
             if remaining - in_cost < 0:
                 raise RunBudgetExceeded(f"run budget ${self.cap:.2f} exhausted")

@@ -1,4 +1,7 @@
-"""Non-Anthropic models via OpenRouter's chat-completions endpoint (raw HTTP with httpx)."""
+"""Any OpenAI-compatible chat-completions endpoint (OpenRouter, OpenAI, Ollama, vLLM, LM Studio,
+Together, Groq, a company gateway...), over raw HTTP with httpx. Endpoint quirks (headers, extra
+body fields, how reasoning effort is sent, the max-tokens parameter name) come from the endpoint's
+config in the catalog."""
 
 from __future__ import annotations
 
@@ -9,7 +12,7 @@ import uuid
 
 import httpx
 
-from ..catalog import ModelSpec
+from ..catalog import Endpoint, ModelSpec
 from .base import (
     PENDING_RESULT,
     Conversation,
@@ -26,11 +29,12 @@ from .base import (
     with_retries,
 )
 
+EFFORT_OPENAI = {"low": "low", "medium": "medium", "high": "high", "xhigh": "high", "max": "high"}
 FINISH_MAP = {"stop": "end_turn", "tool_calls": "tool_use", "length": "max_tokens", "content_filter": "refusal"}
 EFFORT_MAP = {"low": "low", "medium": "medium", "high": "high", "xhigh": "high", "max": "high"}
 
 
-class OpenRouterConversation(Conversation):
+class OpenAIConversation(Conversation):
     def __init__(self, system: str, tools: list[ToolSpec]):
         super().__init__(system, tools)
         self.tools = [
@@ -53,8 +57,8 @@ class OpenRouterConversation(Conversation):
             content = ("ERROR: " + r.content) if r.is_error else r.content
             self.messages.append({"role": "tool", "tool_call_id": r.call_id, "content": content})
 
-    def fork(self) -> "OpenRouterConversation":
-        new = OpenRouterConversation.__new__(OpenRouterConversation)
+    def fork(self) -> "OpenAIConversation":
+        new = OpenAIConversation.__new__(OpenAIConversation)
         new.system, new.tool_specs, new.tools, new.chars = self.system, self.tool_specs, self.tools, self.chars
         new.messages = [dict(m) for m in self.messages]
         answered = {m.get("tool_call_id") for m in new.messages if m.get("role") == "tool"}
@@ -71,42 +75,42 @@ class OpenRouterConversation(Conversation):
         self.messages.append(message)
 
 
-class OpenRouterProvider(Provider):
-    name = "openrouter"
+class OpenAICompatProvider(Provider):
+    name = "openai"
 
-    def __init__(self, retry: RetryPolicy | None = None, api_key: str | None = None):
-        key = api_key or os.environ.get("OPENROUTER_API_KEY")
-        if not key:
-            raise FatalProviderError("OPENROUTER_API_KEY is not set (put it in .env).")
-        self.client = httpx.AsyncClient(
-            timeout=httpx.Timeout(600, connect=30),
-            headers={
-                "Authorization": f"Bearer {key}",
-                "X-Title": "swarmy",
-            },
-        )
+    def __init__(self, endpoint: Endpoint, retry: RetryPolicy | None = None):
+        if not endpoint.base_url:
+            raise FatalProviderError(f"endpoint {endpoint.name!r} needs a base_url")
+        headers = dict(endpoint.headers)
+        if endpoint.api_key_env:
+            key = os.environ.get(endpoint.api_key_env)
+            if not key:
+                raise FatalProviderError(f"{endpoint.api_key_env} is not set (needed by endpoint "
+                                         f"{endpoint.name!r}; put it in .env).")
+            headers["Authorization"] = f"Bearer {key}"
+        self.endpoint = endpoint
+        self.client = httpx.AsyncClient(timeout=httpx.Timeout(endpoint.timeout_s, connect=30), headers=headers)
         self.retry = retry or RetryPolicy()
-        self.url = os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/") + "/chat/completions"
+        self.url = endpoint.base_url.rstrip("/") + "/chat/completions"
 
-    def new_conversation(self, system: str, tools: list[ToolSpec]) -> OpenRouterConversation:
-        return OpenRouterConversation(system, tools)
+    def new_conversation(self, system: str, tools: list[ToolSpec]) -> OpenAIConversation:
+        return OpenAIConversation(system, tools)
 
     async def step(self, conv, spec: ModelSpec, *, max_tokens: int, effort: str | None,
                    tool_choice: str | None = None) -> StepResult:
-        assert isinstance(conv, OpenRouterConversation)
-        body: dict = {
-            "model": spec.model,
-            "messages": conv.messages,
-            "max_tokens": max_tokens,
-            "usage": {"include": True},
-        }
+        assert isinstance(conv, OpenAIConversation)
+        ep = self.endpoint
+        body: dict = {"model": spec.model, "messages": conv.messages, ep.max_tokens_param: max_tokens}
+        body.update(ep.extra_body)
         if conv.tools:
             body["tools"] = conv.tools
             body["tool_choice"] = tool_choice or "auto"
-            # Only route to upstream endpoints that actually support tool calling.
-            body["provider"] = {"require_parameters": True}
+            body.update(ep.tools_extra_body)
         if effort and spec.supports_reasoning is not False:
-            body["reasoning"] = {"effort": EFFORT_MAP.get(effort, "medium")}
+            if ep.effort_style == "openrouter":
+                body["reasoning"] = {"effort": EFFORT_MAP.get(effort, "medium")}
+            elif ep.effort_style == "openai":
+                body["reasoning_effort"] = EFFORT_OPENAI.get(effort, "medium")
 
         async def call():
             try:
@@ -114,7 +118,7 @@ class OpenRouterProvider(Provider):
             except (httpx.TransportError, httpx.TimeoutException) as e:
                 raise Retryable(f"network: {e}") from e
             if resp.status_code != 200:
-                _raise_for_status(resp)
+                _raise_for_status(resp, ep.name)
             data = resp.json()
             if "error" in data and not data.get("choices"):
                 err = data["error"]
@@ -122,7 +126,7 @@ class OpenRouterProvider(Provider):
                 msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
                 if code in (429, 502, 503, 408) or (isinstance(code, int) and code >= 500):
                     raise Retryable(f"upstream {code}: {msg}")
-                raise ProviderError(f"OpenRouter error {code}: {msg}")
+                raise ProviderError(f"{ep.name} error {code}: {msg}")
             choice = (data.get("choices") or [None])[0]
             if choice is None:
                 raise Retryable("empty choices")
@@ -191,7 +195,7 @@ class OpenRouterProvider(Provider):
         await self.client.aclose()
 
 
-def _raise_for_status(resp: httpx.Response) -> None:
+def _raise_for_status(resp: httpx.Response, name: str = "endpoint") -> None:
     code = resp.status_code
     try:
         payload = resp.json()
@@ -207,14 +211,14 @@ def _raise_for_status(resp: httpx.Response) -> None:
     if code == 429:
         low = msg.lower()
         if "per-day" in low or "per day" in low or "daily" in low:
-            raise FatalProviderError(f"OpenRouter daily free-model quota exhausted: {msg}")
+            raise FatalProviderError(f"{name}: daily quota exhausted: {msg}")
         raise Retryable(f"429: {msg}", retry_after)
     if code in (401, 403):
-        raise FatalProviderError(f"OpenRouter auth error {code}: {msg}")
+        raise FatalProviderError(f"{name} auth error {code}: {msg}")
     if code == 402:
-        raise FatalProviderError(f"OpenRouter: insufficient credits: {msg}")
+        raise FatalProviderError(f"{name}: insufficient credits: {msg}")
     if code == 404:
-        raise FatalProviderError(f"OpenRouter model/endpoint not found: {msg}")
+        raise FatalProviderError(f"{name}: model or endpoint not found: {msg}")
     if code in (408, 409) or code >= 500:
         raise Retryable(f"HTTP {code}: {msg}", retry_after)
-    raise ProviderError(f"OpenRouter HTTP {code}: {msg}")
+    raise ProviderError(f"{name} HTTP {code}: {msg}")

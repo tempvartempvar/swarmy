@@ -5,14 +5,18 @@ of battle (ranks, how many subordinates each officer commands, a model and effor
 position), point it at a suite of coding and research tasks, and swARMY runs it under a hard dollar
 budget, grades the output, and reports quality, cost, and coordination metrics for each structure.
 
-Positions default to ranks of the old French army: a *connétable* at the top, then *maréchaux*,
-*colonels* and *capitaines*, with *mousquetaires* doing the hands-on work and a lone *franc-tireur*
-as the single-agent baseline. Titles are only labels: behaviour comes from a position's place in
-the tree, its model and its tools. Rename any position to anything you like.
+Positions default to military ranks: a *Field Marshal* at the top, then generals, colonels and
+captains, with *privates* doing the hands-on work and a *lone wolf* as the single-agent baseline.
+Titles are only labels: behaviour comes from a position's place in the tree, its model, its tools
+and its goal. Rename any position to anything you like.
+
+Give the Field Marshal a mission in plain words ("build a simulation of orbital dynamics across
+different orbits") and watch how it splits the work according to its forces, and how each order
+is passed down and turned into further orders until it reaches the privates.
 
 ```
-connétable (opus, max) ─┬─ maréchal-1 (opus) ─┬─ colonel-1.1 (sonnet) ─┬─ capitaine-1.1.1 (haiku) ─┬─ mousquetaire-1.1.1.1 (free model)
-                        │                     │                        │                          └─ mousquetaire-1.1.1.2
+field-marshal (opus, max) ─┬─ general-1 (opus) ─┬─ colonel-1.1 (sonnet) ─┬─ captain-1.1.1 (haiku) ─┬─ private-1.1.1.1 (any model)
+                           │                    │                        │                        └─ private-1.1.1.2
                  ...                           ...                       ...
 ```
 
@@ -20,8 +24,13 @@ connétable (opus, max) ─┬─ maréchal-1 (opus) ─┬─ colonel-1.1 (sonn
   swap any position's model, add or remove positions and ranks, define wikis and communication
   rules, watch a test run move through the org live, and read the wikis it wrote, with who changed
   what.
-- **Any model at any position.** Claude goes through the Anthropic API; everything else goes through
-  OpenRouter. Swap models in the designer, from the CLI, in YAML, or as a sweep matrix.
+- **Any model, any endpoint.** Anthropic, OpenRouter, OpenAI and a local Ollama are built in, and any
+  OpenAI-compatible server (vLLM, LM Studio, llama.cpp, Together, Groq, Gemini, a LiteLLM gateway...) or
+  Anthropic-compatible gateway can be added. Swap models in the designer, from the CLI, in YAML, or as
+  a sweep matrix.
+- **Missions and goals.** Give the top position an open-ended mission and give any position or level a
+  standing goal. The run explorer shows the chain of orders: every order, the report that came back for
+  each, and how each commander split up its part.
 - **Knowledge sharing and communication as variables.** Wikis can be scoped to the whole org, each
   division or each unit, with read and write permissions. Direct contact (commander to subordinate,
   between teammates, across teams, skip-level, or fully open) can be switched on with rules such as
@@ -55,7 +64,7 @@ Check everything offline first. The scripted mock provider runs the whole pipeli
 making any API calls:
 
 ```bash
-swarmy run --org configs/orgs/grande-armee.yaml --task mixed --mock
+swarmy run --org configs/orgs/field-army.yaml --task mixed --mock
 swarmy sweep configs/sweeps/pilot.yaml --mock
 pytest
 ```
@@ -83,7 +92,7 @@ swarmy ui [--port 8765] [--orgs-dir configs/orgs]
   can also force *Tree*, *Tree, units stacked* (each unit's soldiers in a column) or *Split levels*.
 - **Position tab.** Click a card to see who the position reports to, its direct subordinates, its
   rough cost per call, its wiki access and who it can contact. The rank is explained in English
-  (*capitaine: captain, commands a company*). You can change its model, effort, limits, rank, name
+  (*captain: commands a company*). You can set its standing goal and change its model, effort, limits, rank, name
   and role notes. The scope switch applies an edit to this position only, the whole level, or every
   position with the same rank. Buttons add a subordinate, duplicate the position (with its unit),
   insert an officer above it, or remove it.
@@ -100,10 +109,15 @@ swarmy ui [--port 8765] [--orgs-dir configs/orgs]
   and watch it live. Agents light up while they think, wait or answer; orders and reports flash along
   the edges; messages arc between cards; and an activity feed shows orders, reports, questions with
   their answers, and wiki edits as they happen.
-- **Wiki browser.** Read every wiki a run wrote, live during the run or from any past run. For each
-  page you see who last edited it, with their rank, level and model; every contributor; the content
-  rendered as Markdown; and the full revision history, with a diff for each edit. You can filter pages
-  by the rank of the people who edited them.
+- **Run explorer.** Inspect any run, live or past:
+  - *Chain of orders*: the mission at the top, then every order each commander issued, nested under the
+    order it came from, with each recipient's standing goal, the full order, how it was split further,
+    and the report that came back.
+  - *Wikis*: every page, who last edited it (rank, level, model), all contributors, the full revision
+    history with a diff per edit, and a filter by rank.
+  - *Files*: everything the run left in its workspace.
+- **Models.** List endpoints (with whether their API key is set) and models, add your own endpoints and
+  models, and test any model with one short real call. Additions go to `configs/models.local.yaml`.
 - **Save** writes `configs/orgs/<name>.yaml`, using the compact `levels` form when the tree is
   uniform and an explicit `tree` otherwise. **YAML** shows the config and lets you paste one in.
   Undo and redo cover every edit.
@@ -117,58 +131,83 @@ code the engine runs, so the chart always matches what the agents will do.
 # configs/orgs/regiment.yaml
 name: regiment
 levels:                     # top to bottom; every position in a level shares its settings
-  - role: colonel           # any title; positions are named <role>-<path>, e.g. capitaine-1, mousquetaire-1.2
+  - role: colonel           # any title; positions are named <role>-<path>, e.g. captain-1, private-1.2
     model: sonnet           # alias from configs/models.yaml, or openrouter:<id> / anthropic:<id>
-    effort: low             # low | medium | high | xhigh | max  (maps to Claude's effort / OpenRouter reasoning)
+    effort: low             # low | medium | high | xhigh | max  (Claude effort / OpenAI-style reasoning effort)
+    goal: Keep the regiment's work tested and documented.   # optional standing objective
     span: 2                 # direct subordinates per position
-  - role: capitaine
+  - role: captain
     model: haiku
     span: 3
-  - role: mousquetaire      # bottom level: span 0, does the hands-on work
+  - role: private           # bottom level: span 0, does the hands-on work
     model: gpt-oss-120b
 memory: persistent          # persistent: an agent remembers earlier assignments; fresh: starts clean each time
 ```
 
 For uneven structures or per-position models, write an explicit `tree` instead of `levels`
-(see `configs/orgs/etat-major.yaml`):
+(see `configs/orgs/general-staff.yaml`):
 
 ```yaml
 tree:
-  role: maréchal
+  role: field-marshal
   model: sonnet
+  goal: Split work so intelligence and engineering run in parallel.
   children:
     - role: colonel
-      name: colonel-du-renseignement   # optional custom name (default: <role>-<path>, e.g. colonel-1)
+      name: intelligence-colonel   # optional custom name (default: <role>-<path>, e.g. colonel-1)
       model: haiku
-      children: [{role: éclaireur, model: gpt-oss-120b}, {role: éclaireur, model: qwen-flash}]
-    - {role: sapeur, model: haiku}
+      children: [{role: scout, model: gpt-oss-120b}, {role: scout, model: "ollama:qwen3:8b"}]
+    - {role: sapper, model: haiku}
 ```
 
 ### Ranks
 
-The generator and the designer title positions by depth using these ranks, senior first:
-connétable (Constable of France), maréchal, lieutenant-général, maréchal-de-camp, brigadier,
-colonel, major, chef-de-bataillon, capitaine, lieutenant, sergent, caporal, anspessade
-(lance-corporal). Hands-on positions are *mousquetaires*, and a single-agent org is a
-*franc-tireur*. A one-level army is a capitaine with musketeers, two levels add a colonel above,
-three a maréchal, four the connétable. The list and the English glosses live in
-`swarmy/ranks.py`.
+The generator and the designer title positions by depth, always with the Field Marshal on top:
+field-marshal, general, lieutenant-general, major-general, brigadier, colonel, lieutenant-colonel,
+major, captain, lieutenant, sergeant, corporal, lance-corporal. Hands-on positions are *privates*,
+and a single-agent org is a *lone wolf*. Two levels give a Field Marshal over captains, three add
+colonels in between, four add generals. Inserting a layer in the designer picks the next rank
+down. The list lives in `swarmy/ranks.py`.
+
+### Goals and missions
+
+Any position (or a whole level) can have a standing `goal`. It goes into that agent's instructions
+("pursue it alongside the orders you receive"), and commanders see their subordinates' goals.
+Commanders are also told their forces: each direct subordinate's rank, model and effort, and how
+many positions and hands-on soldiers it commands. So the Field Marshal can give the heavy
+work to the general with the bigger army or the stronger model. Set `disclose_models: false` to
+hide models (useful for some experiments).
+
+A **mission** is an open-ended objective for the top position, with an empty shared workspace and
+no automatic grading:
+
+```bash
+swarmy run --org configs/orgs/field-army.yaml --budget 3 \
+    --mission "Build a simulation of orbital dynamics for satellites in LEO, MEO, GEO and a Molniya orbit, comparing periods and ground tracks, with plots."
+```
+```bash
+swarmy orders            # the chain of orders of the latest run, as an indented outline (--full for whole texts)
+```
+
+In the designer, write the mission in the Manoeuvres tab, then open **Chain of orders** to watch it
+cascade down live. What gets built ends up in `results/runs/<run_id>/workspace/` and in the
+explorer's Files tab.
 
 ### Knowledge sharing
 
 ```yaml
 knowledge:
   wikis:
-    - name: ordres
+    - name: orders
       scope: org              # org | department | team
       write: managers         # who can write: all | managers (officers) | workers (hands-on)
       read: all               # who can read
       publish_brief: true     # post the client's original assignment on it
       description: Orders and plans from the staff.
-    - name: carnet
+    - name: unit-log
       scope: team             # one wiki per unit: an officer plus their direct subordinates
       oversight: true         # officers above the unit can read it (default)
-    - name: dossier
+    - name: division-file
       scope: department
       level: 1                # one wiki per level-1 position (a division), shared by everyone under it
 ```
@@ -180,7 +219,7 @@ and every contributor, with their ranks.
 Every edit is kept as a revision recording the editor's name, rank, level and model, the kind of edit
 (create, replace or append) and when in the run it happened. To read them:
 
-- the **wiki browser** in `swarmy ui` (live or past runs, with history and diffs);
+- the **run explorer** in `swarmy ui` (live or past runs, with history and diffs);
 - `swarmy wiki [RUN] [--wiki ID] [--page TITLE]` on the command line;
 - the run directory: `runs/<run_id>/wikis/wikis.json` (everything) plus one Markdown file per page,
   with a contributor list and a revision table.
@@ -219,15 +258,15 @@ on by default), and `prompt` (extra role instructions).
 To see an org's tree and flatness metrics:
 
 ```bash
-swarmy org configs/orgs/grande-armee.yaml
+swarmy org configs/orgs/field-army.yaml
 ```
 
 ### Swapping models
 
 ```bash
 # per role (or 'top' / 'bottom'), on any command
-swarmy run --org configs/orgs/grande-armee.yaml --task code \
-    --model mousquetaire=openrouter:qwen/qwen3.7-flash --model connétable=sonnet --effort colonel=high
+swarmy run --org configs/orgs/field-army.yaml --task code \
+    --model private=openrouter:qwen/qwen3.7-flash --model field-marshal=sonnet --effort colonel=high
 # any field, by dotted path
 swarmy run --org configs/orgs/regiment.yaml --task qa:kind=aggregate --set levels.1.span=4 --set communication.peers=true
 ```
@@ -239,13 +278,59 @@ a Cartesian product (see `configs/sweeps/model-swap.yaml`):
 orgs:
   - path: configs/orgs/regiment.yaml
     matrix:
-      mousquetaire: [gpt-oss-120b, qwen-flash, haiku]
+      private: [gpt-oss-120b, qwen-flash, haiku]
       effort.colonel: [low, medium]
 ```
 
-The model catalog is `configs/models.yaml`. Writing `openrouter:<model-id>` uses any
-tool-capable OpenRouter model with live pricing, no catalog edit needed. `swarmy models check`
-compares the catalog with OpenRouter's current prices and tool support.
+### Endpoints and models
+
+Models are served by **endpoints**. Built in:
+
+| endpoint | type | key (in `.env`) |
+|---|---|---|
+| `anthropic` | Anthropic Messages API (streaming, adaptive thinking, effort, prompt caching) | `ANTHROPIC_API_KEY` |
+| `openrouter` | OpenAI-compatible, hundreds of models, live prices and real cost per call | `OPENROUTER_API_KEY` |
+| `openai` | OpenAI | `OPENAI_API_KEY` |
+| `ollama` | local Ollama at `http://localhost:11434/v1` | none |
+| `mock` | offline scripted models | none |
+
+Add your own in `configs/models.yaml`, or in the designer's **Models** dialog, which writes the
+git-ignored `configs/models.local.yaml`:
+
+```yaml
+endpoints:
+  vllm:
+    type: openai                      # any OpenAI-compatible chat-completions server
+    base_url: http://gpu-box:8000/v1
+    api_key_env: VLLM_API_KEY         # name of the env var holding the key; omit if none
+    effort_style: none                # none | openai (reasoning_effort) | openrouter (reasoning: {effort})
+    max_tokens_param: max_tokens      # or max_completion_tokens (newer OpenAI models)
+  claude-gateway:
+    type: anthropic                   # an Anthropic-compatible proxy or gateway
+    base_url: https://llm-gateway.example.com/anthropic
+    api_key_env: GATEWAY_KEY
+    headers: {X-Team: research}
+models:
+  big-local:
+    endpoint: vllm
+    model: Qwen/Qwen3-32B
+    price: {input: 0, output: 0}      # set real prices for paid endpoints so the budget guard works
+```
+
+Any position can also name a model inline as `<endpoint>:<model-id>` (`ollama:qwen3:8b`,
+`openrouter:qwen/qwen3.7-flash`). OpenRouter prices are looked up live; local endpoints count as free;
+other endpoints need a price in the catalog, or the budget guard can't limit them. Hands-on models must
+support tool calling.
+
+```bash
+swarmy models endpoints          # endpoints and whether their keys are set
+```
+```bash
+swarmy models test big-local     # one short real call to check it works
+```
+```bash
+swarmy models check              # compare catalog prices with OpenRouter's live prices
+```
 
 ### Generating structures that vary only in depth
 
@@ -254,13 +339,13 @@ compares the catalog with OpenRouter's current prices and tool support.
     name: armee
     workers: 8              # hands-on positions, held constant
     depths: [1, 2, 3, 4]    # ranks of officers above them
-    include_solo: true      # also add a lone franc-tireur baseline
-    ladder:                 # officer tiers, top-down (omit `role` to get default French ranks)
-      - {role: connétable, model: opus, effort: max}
-      - {role: maréchal, model: opus, effort: medium}
+    include_solo: true      # also add a lone-wolf baseline
+    ladder:                 # officer tiers, top-down (omit `role` to get default ranks)
+      - {role: field-marshal, model: opus, effort: max}
+      - {role: general, model: opus, effort: medium}
       - {role: colonel, model: sonnet}
-      - {role: capitaine, model: haiku}
-    worker: {model: gpt-oss-120b}   # titled mousquetaire unless you set a role
+      - {role: captain, model: haiku}
+    worker: {model: gpt-oss-120b}   # titled private unless you set a role
 ```
 
 Spans are split as evenly as possible, with larger spans at the bottom: 8 workers at depth 3
@@ -339,9 +424,9 @@ These assume about 8k prompt tokens (mostly cached) and 1.5k output tokens:
 |---|---|---|
 | `smoke` | do keys, providers and grading work? | 4 (≤ $0.50) |
 | `structure-control` | **does shape matter when every agent runs the same model (Haiku)?** depth 0-3 plus a company-notebook variant, 3 tasks × 3 seeds | 45 |
-| `pilot` | flatness with a realistic model mix (Sonnet commander, Haiku officers, cheap mousquetaires) at 4 mousquetaires | 16 |
-| `model-swap` | the regiment; mousquetaires' model × colonel's effort | 12 |
-| `chain-of-command` | the full Opus→Opus→Sonnet→Haiku→mousquetaire grande armée, flattened step by step at 8 mousquetaires | 4 |
+| `pilot` | flatness with a realistic model mix (Sonnet commander, Haiku officers, cheap privates) at 4 privates | 16 |
+| `model-swap` | the regiment; privates' model × colonel's effort | 12 |
+| `chain-of-command` | the full Opus→Opus→Sonnet→Haiku→private field army, flattened step by step at 8 privates | 4 |
 | `communication` | **same structure and model, different information flow**: strict tree vs team wiki vs org wiki vs peers vs skip-level vs open | 36 |
 
 ## Metrics (in `report.md`, `runs.csv`, `levels.csv`)

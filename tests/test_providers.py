@@ -83,12 +83,12 @@ def test_openrouter_request_shape_retry_and_reported_cost(local_env, monkeypatch
         (200, openrouter_tool_call("submit", {"answer": task.gold()["expected"]}, cost=0.0003)),
     ]
     with openrouter_stub(script) as stub:
-        monkeypatch.setenv("OPENROUTER_BASE_URL", stub.url + "/api/v1")
         async def no_sleep(_):
             return None
 
         monkeypatch.setattr("swarmy.providers.base.asyncio.sleep", no_sleep)
         catalog = Catalog.load(offline=True)
+        catalog.endpoints["openrouter"].base_url = stub.url + "/api/v1"
         tracer = Tracer(tmp_path / "db.sqlite")
 
         async def go():
@@ -101,7 +101,7 @@ def test_openrouter_request_shape_retry_and_reported_cost(local_env, monkeypatch
 
         summary = asyncio.run(go())
 
-    assert summary["passed"], summary
+    assert summary["passed"], summary.get("error")
     body = stub.requests[-1]
     assert body["model"] == "openai/gpt-oss-120b"
     assert body["reasoning"] == {"effort": "high"}
@@ -117,8 +117,8 @@ def test_openrouter_daily_quota_is_fatal(local_env, monkeypatch, tmp_path):
     task = make_task("qa", {"kind": "chain", "hops": 2}, 1)
     script = [(429, json.dumps({"error": {"message": "Rate limit exceeded: free-models-per-day"}}).encode())]
     with openrouter_stub(script) as stub:
-        monkeypatch.setenv("OPENROUTER_BASE_URL", stub.url + "/api/v1")
         catalog = Catalog.load(offline=True)
+        catalog.endpoints["openrouter"].base_url = stub.url + "/api/v1"
 
         async def go():
             reg = ProviderRegistry()
@@ -131,3 +131,70 @@ def test_openrouter_daily_quota_is_fatal(local_env, monkeypatch, tmp_path):
         summary = asyncio.run(go())
     assert summary["status"] == "fatal"
     assert isinstance(summary["fatal"], FatalProviderError)
+
+
+def test_custom_openai_endpoint_without_key(local_env, tmp_path):
+    """A self-hosted OpenAI-compatible server: no key, max_completion_tokens, reasoning_effort."""
+    from swarmy.catalog import Endpoint, ModelSpec
+
+    task = make_task("qa", {"kind": "chain", "hops": 2}, 3)
+    script = [(200, openrouter_tool_call("submit", {"answer": task.gold()["expected"]}, cost=None))]
+    with openrouter_stub(script) as stub:
+        catalog = Catalog.load(offline=True)
+        catalog.endpoints["mybox"] = Endpoint(name="mybox", type="openai", base_url=stub.url + "/v1",
+                                              effort_style="openai", max_tokens_param="max_completion_tokens")
+        catalog.models["local-llm"] = ModelSpec(alias="local-llm", endpoint="mybox", model="my-model",
+                                                endpoint_cfg=catalog.endpoints["mybox"])
+
+        async def go():
+            reg = ProviderRegistry()
+            try:
+                return await run_one(_solo("local-llm", "high"), task, catalog=catalog, registry=reg,
+                                     tracer=Tracer(tmp_path / "db.sqlite"), results_dir=tmp_path, run_cap=0.5)
+            finally:
+                await reg.aclose()
+
+        summary = asyncio.run(go())
+    assert summary["passed"], summary.get("error")
+    body, headers = stub.requests[0], stub.headers[0]
+    assert body["model"] == "my-model" and "max_completion_tokens" in body and "max_tokens" not in body
+    assert body["reasoning_effort"] == "high" and "reasoning" not in body and "usage" not in body
+    assert "authorization" not in headers
+    assert summary["cost_usd"] == 0  # no price set and no cost reported
+
+
+def test_inline_endpoint_model_names():
+    catalog = Catalog.load(offline=True)
+    spec = catalog.resolve("ollama:qwen3:8b")
+    assert spec.endpoint == "ollama" and spec.model == "qwen3:8b" and spec.kind == "openai"
+    assert spec.price_known and spec.rate.input == 0  # local endpoints are free
+    assert catalog.resolve("anthropic:claude-haiku-5-5").rate.input == 0.10
+    with pytest.raises(KeyError):
+        catalog.resolve("nowhere:model")
+
+
+def test_anthropic_compatible_gateway(local_env, monkeypatch, tmp_path):
+    from swarmy.catalog import Endpoint, ModelSpec
+
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    monkeypatch.setenv("GATEWAY_KEY", "gw-secret")
+    task = make_task("qa", {"kind": "chain", "hops": 2}, 1)
+    with anthropic_stub([anthropic_tool_call("submit", {"answer": task.gold()["expected"]})]) as stub:
+        catalog = Catalog.load(offline=True)
+        catalog.endpoints["gw"] = Endpoint(name="gw", type="anthropic", base_url=stub.url, api_key_env="GATEWAY_KEY",
+                                           headers={"X-Team": "research"})
+        catalog.models["gw-haiku"] = ModelSpec(alias="gw-haiku", endpoint="gw", model="claude-haiku-5-5",
+                                               endpoint_cfg=catalog.endpoints["gw"])
+
+        async def go():
+            reg = ProviderRegistry()
+            try:
+                return await run_one(_solo("gw-haiku"), task, catalog=catalog, registry=reg,
+                                     tracer=Tracer(tmp_path / "db.sqlite"), results_dir=tmp_path, run_cap=0.5)
+            finally:
+                await reg.aclose()
+
+        summary = asyncio.run(go())
+    assert summary["passed"], summary.get("error")
+    auth = stub.headers[0].get("x-api-key") or stub.headers[0].get("authorization", "")
+    assert "gw-secret" in auth and stub.headers[0]["x-team"] == "research"

@@ -121,9 +121,9 @@ def test_all_example_sweeps_plan():
 
 
 def test_cli_mock_run(tmp_path, capsys):
-    code = main(["--results", str(tmp_path), "run", "--org", str(CONFIG_DIR / "orgs" / "grande-armee.yaml"),
-                 "--task", "qa:kind=aggregate,n=4", "--mock", "--model", "mousquetaire=haiku",
-                 "--effort", "connétable=high"])
+    code = main(["--results", str(tmp_path), "run", "--org", str(CONFIG_DIR / "orgs" / "field-army.yaml"),
+                 "--task", "qa:kind=aggregate,n=4", "--mock", "--model", "private=haiku",
+                 "--effort", "field-marshal=high"])
     out = capsys.readouterr().out
     assert code == 0
-    assert "mousquetaire=haiku" in out and "mousquetaire-2.2.2.2" in out
+    assert "private=haiku" in out and "private-2.2.2.2" in out

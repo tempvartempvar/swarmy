@@ -27,6 +27,7 @@ class Agent:
         self.children: list[Agent] = []
         self.conv = None
         self.specs: dict = {}
+        self.current_order: int | None = None  # id of the order being worked on
 
     def max_turns(self, org: OrgConfig) -> int:
         if self.spec.max_turns:
@@ -44,8 +45,9 @@ class Agent:
             self.conv.add_user("Messages received:\n" + "\n\n".join(pending))
             ctx.event(self, "inbox", {"count": len(pending)})
 
-    async def handle(self, text: str, ctx: "RunContext") -> dict:
+    async def handle(self, text: str, ctx: "RunContext", order_id: int | None = None) -> dict:
         """Work on one assignment until `submit` (or a limit). Returns {report, answer, status}."""
+        self.current_order = order_id
         ctx.active.add(self.name)
         ctx.live(self, "working", {})
         try:
@@ -150,7 +152,7 @@ def build_tree(org: OrgConfig, catalog: Catalog, mock: bool = False) -> Agent:
     def resolve(name: str) -> ModelSpec:
         if name not in resolved:
             spec = catalog.resolve(name)
-            if mock and spec.provider != "mock":
+            if mock and spec.kind != "mock":
                 spec = spec.model_copy(update={"price": Price(input=0, output=0)})
             resolved[name] = spec
         return resolved[name]

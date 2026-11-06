@@ -14,7 +14,8 @@
     <button id="btn-new" title="Start a new org">New</button>
     <button id="btn-save" class="primary" title="Save to configs/orgs">Save</button>
     <button id="btn-yaml" title="View or paste YAML">YAML</button>
-    <button id="btn-wikis" title="Read the wikis your runs produced, with who changed what">Wiki browser</button>
+    <button id="btn-explorer" title="Chain of orders, files and wikis of live and past runs">Run explorer</button>
+    <button id="btn-models" title="Models and endpoints">Models</button>
   </div>
   <div class="history">
     <button id="btn-undo" title="Undo (Ctrl+Z)" aria-label="Undo">↶</button>
@@ -68,18 +69,32 @@
   </form>
 </dialog>
 
-<dialog id="wiki-dialog" class="wide" aria-label="Wiki browser">
+<dialog id="explorer" class="wide" aria-label="Run explorer">
   <div class="wb-top">
-    <h3>Wiki browser</h3>
-    <select id="wb-source" aria-label="Which run"></select>
+    <h3>Run explorer</h3>
+    <select id="ex-source" aria-label="Which run"></select>
+    <div class="ex-tabs wb-tabs" role="tablist">
+      <button type="button" data-tab="orders">Chain of orders</button>
+      <button type="button" data-tab="wikis">Wikis</button>
+      <button type="button" data-tab="files">Files</button>
+    </div>
     <select id="wb-role" aria-label="Filter by rank"></select>
-    <button id="wb-refresh" type="button">Refresh</button>
-    <button id="wb-close" type="button">Close</button>
+    <button id="ex-refresh" type="button">Refresh</button>
+    <button id="ex-close" type="button">Close</button>
   </div>
   <div class="wb-body">
-    <nav id="wb-nav" class="wb-nav"></nav>
-    <section id="wb-main" class="wb-main"></section>
+    <nav id="ex-nav" class="wb-nav"></nav>
+    <section id="ex-main" class="wb-main"></section>
   </div>
+</dialog>
+
+<dialog id="models-dialog" class="wide" aria-label="Models and endpoints">
+  <div class="wb-top">
+    <h3>Models &amp; endpoints</h3>
+    <span class="muted small">Your additions are saved to <code>configs/models.local.yaml</code>. API keys go in <code>.env</code>.</span>
+    <button id="md-close" type="button">Close</button>
+  </div>
+  <div id="md-body" class="md-body"></div>
 </dialog>
 
 <div id="toast" class="toast" hidden></div>
