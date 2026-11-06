@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS runs (
 CREATE TABLE IF NOT EXISTS calls (
     id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT, node TEXT, level INTEGER, role TEXT,
     is_manager INTEGER, model_alias TEXT, model_id TEXT, served_model TEXT, provider TEXT, turn INTEGER,
+    purpose TEXT,
     input_tokens INTEGER, output_tokens INTEGER, cache_read_tokens INTEGER, cache_write_tokens INTEGER,
     reasoning_tokens INTEGER, cost_usd REAL, latency_s REAL, rate_wait_s REAL, retries INTEGER,
     max_tokens INTEGER, stop_reason TEXT, n_tool_calls INTEGER, fallback INTEGER, ts REAL
@@ -52,6 +53,10 @@ class Tracer:
         self.conn = sqlite3.connect(self.path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
+        cols = {r[1] for r in self.conn.execute("PRAGMA table_info(calls)")}
+        if "purpose" not in cols:  # databases created by older versions
+            self.conn.execute("ALTER TABLE calls ADD COLUMN purpose TEXT")
+            self.conn.commit()
         self._lock = threading.Lock()
 
     def _exec(self, sql: str, args: tuple = ()) -> None:

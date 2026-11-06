@@ -1,0 +1,48 @@
+# Same structure (Haiku everywhere, 8 workers under 2 managers), different ways of sharing
+# knowledge and communicating. Isolates the effect of information flow from structure and model.
+name: communication
+description: strict tree vs wikis vs lateral/skip-level contact vs fully open
+budget_usd: 5.0
+concurrency: 3
+orgs:
+  - generate: {name: strict, workers: 8, depths: [2], ladder: [{model: haiku}], worker: {model: haiku}}
+  - generate:
+      name: team-wiki
+      workers: 8
+      depths: [2]
+      ladder: [{model: haiku}]
+      worker: {model: haiku}
+      knowledge: {wikis: [{name: team-notes, scope: team}]}
+  - generate:
+      name: org-wiki
+      workers: 8
+      depths: [2]
+      ladder: [{model: haiku}]
+      worker: {model: haiku}
+      knowledge: {wikis: [{name: handbook, scope: org, publish_brief: true}]}
+  - generate:
+      name: peers
+      workers: 8
+      depths: [2]
+      ladder: [{model: haiku}]
+      worker: {model: haiku}
+      communication: {chain: true, peers: true}
+  - generate:
+      name: skip-level
+      workers: 8
+      depths: [2]
+      ladder: [{model: haiku}]
+      worker: {model: haiku}
+      communication: {chain: true, skip_up: 1, skip_down: 1, cc_skipped: true}
+  - generate:
+      name: open
+      workers: 8
+      depths: [2]
+      ladder: [{model: haiku}]
+      worker: {model: haiku}
+      communication: {open: true}
+      knowledge: {wikis: [{name: handbook, scope: org, publish_brief: true}]}
+tasks:
+  - {family: qa, params: {kind: aggregate, n: 8}, seeds: [1, 2]}
+  - {family: code, params: {n: 8, coupling: 0.5}, seeds: [1, 2]}
+  - {family: mixed, params: {products: 5, cities: 4}, seeds: [1, 2]}

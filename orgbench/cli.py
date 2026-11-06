@@ -34,7 +34,7 @@ def _add_org_overrides(p):
                    help="swap a level's model (role name, 'top' or 'bottom'); repeatable")
     p.add_argument("--effort", action="append", metavar="ROLE=EFFORT", help="set a level's effort; repeatable")
     p.add_argument("--set", action="append", metavar="PATH=VALUE",
-                   help="dotted override, e.g. levels.1.span=3 or communication=team_board")
+                   help="dotted override, e.g. levels.1.span=3 or communication.peers=true")
 
 
 def _paths(args) -> tuple[Path, Path]:
@@ -189,6 +189,22 @@ def cmd_models(args) -> int:
     return 0
 
 
+def cmd_ui(args) -> int:
+    from .ui.server import serve
+
+    results, _ = _paths(args)
+    httpd = serve(args.host, args.port, Path(args.orgs_dir) if args.orgs_dir else None, results, args.models)
+    host, port = httpd.server_address[:2]
+    print(f"orgbench UI on http://{host}:{port}  (Ctrl+C to stop)")
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        httpd.server_close()
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     load_dotenv()
     ap = argparse.ArgumentParser(prog="orgbench", description=__doc__)
@@ -236,6 +252,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--seed", type=int, default=1)
     p.add_argument("--gold", action="store_true")
     p.set_defaults(fn=cmd_task)
+
+    p = sub.add_parser("ui", help="open the interactive org designer in your browser")
+    p.add_argument("--host", default="127.0.0.1")
+    p.add_argument("--port", type=int, default=8765)
+    p.add_argument("--orgs-dir", default=None, help="where org YAML files are read and saved (default configs/orgs)")
+    p.set_defaults(fn=cmd_ui)
 
     p = sub.add_parser("models", help="list / check / refresh the model catalog")
     p.add_argument("action", nargs="?", default="list", choices=["list", "check", "refresh"])

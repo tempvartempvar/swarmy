@@ -64,6 +64,15 @@ def run_metrics(run: dict, calls: list[dict], events: list[dict]) -> dict:
         "agent_errors": len([e for e in ev if e["kind"] == "error"]),
         "tool_errors": len([e for e in ev if e["kind"] == "tool" and not e["data"].get("ok", True)]),
         "fallback_calls": sum(c["fallback"] or 0 for c in calls),
+        "messages": len([e for e in ev if e["kind"] == "message"]),
+        "asks": len([e for e in ev if e["kind"] == "ask"]),
+        "skip_level": len([e for e in ev if e["kind"] in ("message", "ask")
+                           and e["data"].get("kind") in ("skip_up", "skip_down")]),
+        "wiki_writes": len([e for e in ev if e["kind"] == "wiki_write"]),
+        "wiki_reads": len([e for e in ev if e["kind"] == "wiki_read"]),
+        "undelivered": sum(e["data"].get("count", 0) for e in ev if e["kind"] == "undelivered"),
+        "answer_cost_share": (sum(c["cost_usd"] or 0 for c in calls if c.get("purpose") == "answer") / total_cost)
+        if total_cost else None,
         "parallelism": (run["llm_s"] / run["wall_s"]) if run.get("wall_s") else None,
     }
 
@@ -117,14 +126,26 @@ def summarize(done: list[dict]) -> list[dict]:
             "coverage": _mean([r["coverage"] for r in rs]), "redundancy": _mean([r["redundancy"] for r in rs]),
             "review_gain": _mean([r["review_gain"] for r in rs]),
             "parallelism": _mean([r["parallelism"] for r in rs]),
+            **{k: _mean([r[k] for r in rs]) for k in ("messages", "asks", "skip_level", "wiki_writes", "wiki_reads",
+                                                      "undelivered", "answer_cost_share")},
+            "communication": rs[0].get("communication"),
             "statuses": dict(statuses),
             "families": {fam: _mean([r["score"] for r in rs if r["family"] == fam])
                          for fam in sorted({r["family"] for r in rs})},
             "cost_by_level": _sum_levels([r["cost_by_level"] for r in rs], len(rs)),
-            "roles": json.loads(rs[0]["org_json"])["levels"],
+            "roles": _layer_roles(rs[0]["org_json"]),
         })
     out.sort(key=lambda s: (-(s["score"] or 0), s["cost_per_run"]))
     return out
+
+
+def _layer_roles(org_json: str) -> list[dict]:
+    from .config import OrgConfig
+
+    try:
+        return [{"role": r} for r in OrgConfig.model_validate_json(org_json).layer_roles()]
+    except Exception:
+        return [{"role": lv.get("role", "?")} for lv in (json.loads(org_json).get("levels") or [])]
 
 
 def _sum_levels(dicts, n):
@@ -261,7 +282,8 @@ def write_report(tracer: Tracer, sweep_ref: str | None, out_dir: Path | None = N
                 "passed", "cost_usd", "wall_s", "n_calls", "input_tokens", "output_tokens", "cache_read_tokens",
                 "reasoning_tokens", "rate_wait_s", "coord_cost_share", "coord_token_share", "delegations", "rework",
                 "coverage", "redundancy", "first_pass_score", "review_gain", "nudges", "turn_limits",
-                "agent_errors", "tool_errors", "fallback_calls"]
+                "agent_errors", "tool_errors", "fallback_calls", "messages", "asks", "skip_level", "wiki_writes",
+                "wiki_reads", "undelivered", "answer_cost_share"]
     with open(out / "runs.csv", "w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=run_cols, extrasaction="ignore")
         w.writeheader()
@@ -309,6 +331,16 @@ def write_report(tracer: Tracer, sweep_ref: str | None, out_dir: Path | None = N
         for s in summary:
             lines.append(f"| {s['org']} | " + " | ".join(_f(s["families"].get(f)) for f in fams) + " |")
         lines.append("")
+    if any((s["messages"] or s["asks"] or s["wiki_writes"] or s["wiki_reads"]) for s in summary):
+        lines += ["## Knowledge sharing and communication (means per run)", "",
+                  "| org | rules | messages | asks | skip-level | wiki writes | wiki reads | undelivered | answer $ |",
+                  "|---|---|---|---|---|---|---|---|---|"]
+        for s in summary:
+            lines.append(
+                f"| {s['org']} | {s['communication'] or 'tree'} | {_f(s['messages'], '{:.1f}')} | {_f(s['asks'], '{:.1f}')} | "
+                f"{_f(s['skip_level'], '{:.1f}')} | {_f(s['wiki_writes'], '{:.1f}')} | {_f(s['wiki_reads'], '{:.1f}')} | "
+                f"{_f(s['undelivered'], '{:.1f}')} | {_f(s['answer_cost_share'], '{:.0%}')} |")
+        lines.append("")
     lines += ["## Cost by level (mean $/run)", "", "| org | " + " | ".join(f"L{i}" for i in range(6)) + " |",
               "|---|" + "---|" * 6]
     for s in summary:
@@ -338,6 +370,9 @@ def write_report(tracer: Tracer, sweep_ref: str | None, out_dir: Path | None = N
         "(1.0 = no duplicated work).",
         "- **review gain**: final score minus the workspace score when the top agent's first delegation returned "
         "(code/mixed only); positive means review and rework at the top helped.",
+        "- **messages / asks / skip-level**: direct contacts outside delegate/report (skip-level = contacts that "
+        "bypass a manager). **undelivered**: inbox messages never seen because the recipient was not given more work.",
+        "- **answer $**: share of spend on answering colleagues' questions in side conversations.",
         "- With few runs per org, CIs are wide. Treat differences inside the CI as noise.",
     ]
     (out / "report.md").write_text("\n".join(lines) + "\n")

@@ -9,11 +9,13 @@ import traceback
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
 from .agents import Agent, build_tree
 from .budget import RunBudget, RunBudgetExceeded
 from .catalog import Catalog
 from .config import OrgConfig
+from .rules import WikiInstance, contacts, wiki_instances, wikis_for
 from .prompts import root_message
 from .providers import FatalProviderError, ProviderRegistry, StepResult
 from .tasks import TaskInstance
@@ -32,21 +34,51 @@ class RunContext:
     tracer: Tracer
     transcript: Transcript
     tools: Toolbox = None  # type: ignore[assignment]
-    boards: dict[str, list[str]] = field(default_factory=dict)
+    listener: Callable[[dict], None] | None = None  # live UI hook
+    agents: dict[str, Agent] = field(default_factory=dict)
+    wikis: list[WikiInstance] = field(default_factory=list)
+    wiki_pages: dict[str, dict] = field(default_factory=dict)
+    inboxes: dict[str, list[str]] = field(default_factory=lambda: defaultdict(list))
+    messages_sent: Counter = field(default_factory=Counter)
+    active: set[str] = field(default_factory=set)
     assign_counts: Counter = field(default_factory=Counter)
     delegate_rounds: Counter = field(default_factory=Counter)
     totals: Counter = field(default_factory=Counter)
     per_node: dict = field(default_factory=lambda: defaultdict(Counter))
+    _contacts: dict = field(default_factory=dict)
+
+    def bind(self, root: Agent) -> None:
+        self.agents = {a.name: a for a in root.walk()}
+        self.wikis = wiki_instances(self.org)
+        for a in root.walk():
+            self._contacts[a.name] = {b.name: k for b, k in contacts(self.org, a.node)}
+        for inst in self.wikis:
+            pages = self.wiki_pages.setdefault(inst.id, {})
+            if inst.spec.publish_brief:
+                pages["Client brief"] = {"content": self.task.brief, "author": "client", "version": 1}
+
+    def wiki_access(self, agent: Agent) -> list[tuple[WikiInstance, bool]]:
+        return wikis_for(self.wikis, agent.name)
+
+    def contacts_of(self, agent: Agent) -> dict[str, str]:
+        return self._contacts.get(agent.name, {})
 
     def event(self, agent: Agent, kind: str, data: dict | None = None) -> None:
         self.tracer.log_event(self.run_id, agent.name, agent.level, kind, data)
+        if self.listener:
+            self.listener({"type": "event", "node": agent.name, "kind": kind, "data": data or {}, "t": time.time()})
 
-    def log_call(self, agent: Agent, r: StepResult, cost: float, turn: int, max_tokens: int) -> None:
+    def live(self, agent: Agent, state: str, data: dict | None = None) -> None:
+        if self.listener:
+            self.listener({"type": "state", "node": agent.name, "state": state, "data": data or {}, "t": time.time()})
+
+    def log_call(self, agent: Agent, r: StepResult, cost: float, turn: int, max_tokens: int,
+                 purpose: str = "work") -> None:
         u = r.usage
         self.tracer.log_call({
             "run_id": self.run_id, "node": agent.name, "level": agent.level, "role": agent.spec.role,
             "is_manager": int(bool(agent.children)), "model_alias": agent.model.alias, "model_id": agent.model.model,
-            "served_model": r.served_model, "provider": agent.model.provider, "turn": turn,
+            "served_model": r.served_model, "provider": agent.model.provider, "turn": turn, "purpose": purpose,
             "input_tokens": u.input_tokens, "output_tokens": u.output_tokens,
             "cache_read_tokens": u.cache_read_tokens, "cache_write_tokens": u.cache_write_tokens,
             "reasoning_tokens": u.reasoning_tokens, "cost_usd": cost, "latency_s": r.latency_s,
@@ -61,16 +93,9 @@ class RunContext:
         self.totals["llm_s"] += r.latency_s
         self.totals["rate_wait_s"] += r.rate_wait_s
         self.per_node[agent.name]["cost"] += cost
-
-    def board_keys(self, agent: Agent) -> list[str]:
-        if self.org.communication == "global_board":
-            return ["global"]
-        keys = []
-        if agent.parent is not None:
-            keys.append(f"team:{agent.parent.name}")
-        if agent.children:
-            keys.append(f"team:{agent.name}")
-        return keys
+        if self.listener:
+            self.listener({"type": "call", "node": agent.name, "cost": cost, "purpose": purpose,
+                           "total_cost": self.budget.spent, "t": time.time()})
 
 
 async def run_one(
@@ -85,6 +110,7 @@ async def run_one(
     timeout_s: float = 1200,
     sweep_id: str | None = None,
     rep: int = 0,
+    listener: Callable[[dict], None] | None = None,
 ) -> dict:
     run_id = new_id("run")
     run_dir = results_dir / "runs" / run_id
@@ -93,8 +119,9 @@ async def run_one(
     root = build_tree(org, catalog, mock=registry.mock)
     transcript = Transcript(run_dir / "transcript.jsonl")
     ctx = RunContext(run_id=run_id, org=org, task=task, workspace=workspace, registry=registry,
-                     budget=RunBudget(run_cap), tracer=tracer, transcript=transcript)
+                     budget=RunBudget(run_cap), tracer=tracer, transcript=transcript, listener=listener)
     ctx.tools = Toolbox(ctx)
+    ctx.bind(root)
 
     started, t0 = time.time(), time.monotonic()
     status, error, submission, fatal = "completed", None, None, None
@@ -117,6 +144,10 @@ async def run_one(
 
     answer = submission.get("answer") if submission else None
     grade = await asyncio.to_thread(task.grade, answer, workspace)
+    undelivered = {k: len(v) for k, v in ctx.inboxes.items() if v}
+    if undelivered:
+        ctx.event(root, "undelivered", {"by_node": undelivered, "count": sum(undelivered.values())})
+    _save_wikis(ctx, run_dir / "wikis")
     transcript.write(node="-", kind="result", status=status, answer=answer, score=grade.score, error=error)
     transcript.close()
 
@@ -125,7 +156,7 @@ async def run_one(
     row = {
         "run_id": run_id, "sweep_id": sweep_id, "org_name": org.name, "org_json": org.model_dump_json(),
         "shape": metrics["shape"], "depth": metrics["depth"], "n_agents": metrics["n_agents"],
-        "n_workers": metrics["n_workers"], "communication": org.communication,
+        "n_workers": metrics["n_workers"], "communication": org.communication_summary(),
         "task_id": task.task_id, "family": task.family, "task_params": json.dumps(task.params), "seed": task.seed,
         "rep": rep, "status": status, "score": grade.score, "passed": int(grade.passed), "answer": answer,
         "grade_json": json.dumps(grade.details, default=str), "cost_usd": ctx.budget.spent, "budget_cap": run_cap,
@@ -137,6 +168,7 @@ async def run_one(
     }
     tracer.save_run(row)
     nodes = {a.name: {"level": a.level, "role": a.spec.role, "model": a.model.alias,
+                      "parent": a.parent.name if a.parent else None,
                       **{k: round(v, 6) if isinstance(v, float) else v for k, v in ctx.per_node[a.name].items()}}
              for a in root.walk()}
     summary = {**{k: row[k] for k in ("run_id", "org_name", "task_id", "status", "score", "passed", "answer",
@@ -145,4 +177,18 @@ async def run_one(
     (run_dir / "result.json").write_text(json.dumps(summary, indent=2, default=str))
     if fatal is not None:
         summary["fatal"] = fatal
+    if listener:
+        listener({"type": "finished", "summary": {k: v for k, v in summary.items() if k != "fatal"},
+                  "t": time.time()})
     return summary
+
+
+def _save_wikis(ctx: RunContext, out: Path) -> None:
+    for wiki_id, pages in ctx.wiki_pages.items():
+        if not pages:
+            continue
+        d = out / wiki_id.replace("/", "__")
+        d.mkdir(parents=True, exist_ok=True)
+        for i, (title, p) in enumerate(pages.items()):
+            safe = "".join(ch if ch.isalnum() or ch in "-_ " else "_" for ch in title)[:80] or f"page{i}"
+            (d / f"{safe}.md").write_text(f"<!-- v{p['version']} by {p['author']} -->\n# {title}\n\n{p['content']}\n")

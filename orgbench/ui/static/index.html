@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>orgbench · Org designer</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">orgbench <span>org designer</span></div>
+  <div class="org-picker">
+    <select id="org-select" aria-label="Open an org"></select>
+    <button id="btn-new" title="Start a new org">New</button>
+    <button id="btn-save" class="primary" title="Save to configs/orgs">Save</button>
+    <button id="btn-yaml" title="View or paste YAML">YAML</button>
+  </div>
+  <div class="history">
+    <button id="btn-undo" title="Undo (Ctrl+Z)" aria-label="Undo">↶</button>
+    <button id="btn-redo" title="Redo (Ctrl+Shift+Z)" aria-label="Redo">↷</button>
+  </div>
+  <div id="metrics" class="metrics"></div>
+</header>
+
+<div id="banner" class="banner" hidden></div>
+
+<main class="layout">
+  <section class="canvas" id="canvas">
+    <svg id="chart" role="img" aria-label="Organization chart"></svg>
+    <div class="canvas-tools">
+      <button id="zoom-in" aria-label="Zoom in">+</button>
+      <button id="zoom-out" aria-label="Zoom out">−</button>
+      <button id="zoom-fit" title="Fit (F)">Fit</button>
+      <button id="stack" class="on" title="Stack each team's workers vertically">Stack teams</button>
+    </div>
+    <div id="legend" class="legend" hidden></div>
+    <div class="hint" id="hint">Click a position to inspect it · drag to pan · scroll to zoom</div>
+  </section>
+
+  <aside class="sidebar">
+    <nav class="tabs" role="tablist">
+      <button data-tab="structure" class="active">Structure</button>
+      <button data-tab="position">Position</button>
+      <button data-tab="knowledge">Knowledge</button>
+      <button data-tab="communication">Communication</button>
+      <button data-tab="run">Test run</button>
+    </nav>
+    <div id="panel" class="panel"></div>
+  </aside>
+</main>
+
+<dialog id="yaml-dialog">
+  <form method="dialog">
+    <h3>Org config (YAML)</h3>
+    <p class="muted">Compact <code>levels</code> form is used when every level is uniform; otherwise an explicit <code>tree</code>. Edit and apply, or paste a config.</p>
+    <textarea id="yaml-text" spellcheck="false"></textarea>
+    <div class="row end">
+      <button value="cancel">Close</button>
+      <button id="yaml-copy" type="button">Copy</button>
+      <button id="yaml-apply" type="button" class="primary">Apply</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast" class="toast" hidden></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

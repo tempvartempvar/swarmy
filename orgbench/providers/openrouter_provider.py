@@ -11,6 +11,7 @@ import httpx
 
 from ..catalog import ModelSpec
 from .base import (
+    PENDING_RESULT,
     Conversation,
     FatalProviderError,
     Provider,
@@ -52,6 +53,19 @@ class OpenRouterConversation(Conversation):
             content = ("ERROR: " + r.content) if r.is_error else r.content
             self.messages.append({"role": "tool", "tool_call_id": r.call_id, "content": content})
 
+    def fork(self) -> "OpenRouterConversation":
+        new = OpenRouterConversation.__new__(OpenRouterConversation)
+        new.system, new.tool_specs, new.tools, new.chars = self.system, self.tool_specs, self.tools, self.chars
+        new.messages = [dict(m) for m in self.messages]
+        answered = {m.get("tool_call_id") for m in new.messages if m.get("role") == "tool"}
+        for m in reversed(new.messages):
+            if m.get("role") == "assistant":
+                pending = [tc["id"] for tc in m.get("tool_calls") or [] if tc["id"] not in answered]
+                if pending:
+                    new.add_tool_results([ToolResult(i, PENDING_RESULT) for i in pending])
+                break
+        return new
+
     def add_assistant(self, message: dict) -> None:
         self.chars += len(json.dumps(message))
         self.messages.append(message)
@@ -77,7 +91,8 @@ class OpenRouterProvider(Provider):
     def new_conversation(self, system: str, tools: list[ToolSpec]) -> OpenRouterConversation:
         return OpenRouterConversation(system, tools)
 
-    async def step(self, conv, spec: ModelSpec, *, max_tokens: int, effort: str | None) -> StepResult:
+    async def step(self, conv, spec: ModelSpec, *, max_tokens: int, effort: str | None,
+                   tool_choice: str | None = None) -> StepResult:
         assert isinstance(conv, OpenRouterConversation)
         body: dict = {
             "model": spec.model,
@@ -87,7 +102,7 @@ class OpenRouterProvider(Provider):
         }
         if conv.tools:
             body["tools"] = conv.tools
-            body["tool_choice"] = "auto"
+            body["tool_choice"] = tool_choice or "auto"
             # Only route to upstream endpoints that actually support tool calling.
             body["provider"] = {"require_parameters": True}
         if effort and spec.supports_reasoning is not False:

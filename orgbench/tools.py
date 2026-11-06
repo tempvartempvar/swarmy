@@ -1,5 +1,6 @@
 """Tools available to agents. Which tools an agent gets depends on its position (manager or
-hands-on worker), its level settings, the task, and the org's communication policy."""
+hands-on worker), its settings, the task, the wikis it can access and the org's communication
+rules."""
 
 from __future__ import annotations
 
@@ -8,9 +9,11 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from .prompts import assignment_message
-from .providers import ToolCall, ToolResult, ToolSpec
+from .prompts import assignment_message, question_message, system_prompt
+from .providers import ProviderError, ToolCall, ToolResult, ToolSpec
+from .rules import KIND_LABELS, relation, skipped_managers
 from .sandbox import run_python, truncate
+from .tasks.base import tokenize
 
 if TYPE_CHECKING:
     from .agents import Agent
@@ -19,6 +22,8 @@ if TYPE_CHECKING:
 READ_ONLY_FILES = {"SPEC.md"}
 MAX_READ = 20000
 MAX_WRITE = 200_000
+MAX_WIKI_PAGE = 30_000
+ANSWER_TOKENS = 4000
 
 
 class ToolError(Exception):
@@ -68,10 +73,37 @@ def tool_specs(agent: "Agent", ctx: "RunContext") -> list[ToolSpec]:
                               "and snippets.", _obj({"query": {"type": "string"}}, ["query"])))
         specs.append(ToolSpec("read_doc", "Read a knowledge-base document by id (e.g. doc-012) or exact title.",
                               _obj({"doc_id": {"type": "string"}}, ["doc_id"])))
-    if org.communication != "tree":
-        specs.append(ToolSpec("post_note", "Post a short note to your team's shared board.",
-                              _obj({"text": {"type": "string"}}, ["text"])))
-        specs.append(ToolSpec("read_notes", "Read your team's shared board.", _obj({}, [])))
+
+    wikis = ctx.wiki_access(agent)
+    if wikis:
+        readable = [w.id for w, _ in wikis]
+        writable = [w.id for w, can in wikis if can]
+        specs.append(ToolSpec("wiki_read", "Read a shared wiki. Without `page`, lists its pages; with `page`, returns "
+                              "that page.", _obj({"wiki": {"type": "string", "enum": readable},
+                                                  "page": {"type": "string"}}, ["wiki"])))
+        specs.append(ToolSpec("wiki_search", "Search the pages of a shared wiki by keywords.",
+                              _obj({"wiki": {"type": "string", "enum": readable}, "query": {"type": "string"}},
+                                   ["wiki", "query"])))
+        if writable:
+            specs.append(ToolSpec("wiki_write", "Create or update a page on a shared wiki. Set append=true to add to "
+                                  "the end of an existing page instead of replacing it.",
+                                  _obj({"wiki": {"type": "string", "enum": writable}, "page": {"type": "string"},
+                                        "content": {"type": "string"}, "append": {"type": "boolean"}},
+                                       ["wiki", "page", "content"])))
+
+    contacts = ctx.contacts_of(agent)
+    if contacts:
+        names = list(contacts)
+        modes = org.communication.modes
+        if "ask" in modes:
+            specs.append(ToolSpec("ask", "Ask an allowed colleague a question and wait for their answer.",
+                                  _obj({"to": {"type": "string", "enum": names}, "question": {"type": "string"}},
+                                       ["to", "question"])))
+        if "message" in modes:
+            specs.append(ToolSpec("send_message", "Leave a note in an allowed colleague's inbox (no reply). They see "
+                                  "it the next time they act.",
+                                  _obj({"to": {"type": "string", "enum": names}, "text": {"type": "string"}},
+                                       ["to", "text"])))
 
     if agent.parent is None:
         props = {"answer": {"type": "string", "description": "the final answer only"},
@@ -92,11 +124,14 @@ def validate_args(spec: ToolSpec, args: dict) -> str | None:
             return f"missing required argument '{key}'"
     types = {"string": str, "array": list, "object": dict, "integer": int, "number": (int, float), "boolean": bool}
     for key, val in args.items():
-        expected = props.get(key, {}).get("type")
+        schema = props.get(key, {})
+        expected = schema.get("type")
         if expected and not isinstance(val, types[expected]):
             if expected == "string" and isinstance(val, (int, float)):
                 continue  # tolerate numeric answers
             return f"argument '{key}' should be of type {expected}"
+        if "enum" in schema and val not in schema["enum"]:
+            return f"'{val}' is not allowed for '{key}' (allowed: {', '.join(map(str, schema['enum']))})"
     return None
 
 
@@ -152,22 +187,154 @@ class Toolbox:
             ctx.event(agent, "assign", {
                 "to": to, "to_level": child.level, "leaf": not child.children, "chars": len(text),
                 "round": ctx.assign_counts[to], "terms": [t for t in terms if t.lower() in low],
+                "preview": text[:240],
             })
 
+        ctx.live(agent, "waiting", {"on": list(jobs)})
         async with asyncio.TaskGroup() as tg:
             futures = {to: tg.create_task(by_name[to].handle(assignment_message(agent, text), ctx))
                        for to, text in jobs.items()}
+        ctx.live(agent, "working", {})
 
         parts = [f"Note: {p}" for p in problems]
         for to, fut in futures.items():
             rep = fut.result()
-            ctx.event(by_name[to], "report", {"to": agent.name, "chars": len(rep["report"]), "status": rep["status"]})
+            ctx.event(by_name[to], "report", {"to": agent.name, "chars": len(rep["report"]), "status": rep["status"],
+                                              "preview": rep["report"][:240]})
             parts.append(f"### Report from {to} [{rep['status']}]\n{rep['report']}")
         if ctx.task.has_workspace:
             score = await asyncio.to_thread(ctx.task.progress, ctx.workspace)
             if score is not None:
                 ctx.event(agent, "progress", {"score": score, "round": ctx.delegate_rounds[agent.name]})
         return "\n\n".join(parts)
+
+    # ---- direct communication ----
+    def _check_contact(self, agent: "Agent", to: str) -> tuple["Agent", str]:
+        ctx = self.ctx
+        kind = ctx.contacts_of(agent).get(to)
+        if kind is None:
+            raise ToolError(f"you are not allowed to contact {to}")
+        limit = ctx.org.communication.max_messages
+        if ctx.messages_sent[agent.name] >= limit:
+            raise ToolError(f"you have used all {limit} of your messages")
+        ctx.messages_sent[agent.name] += 1
+        return ctx.agents[to], kind
+
+    def _cc(self, sender: "Agent", target: "Agent", text: str) -> list[str]:
+        ctx = self.ctx
+        if not ctx.org.communication.cc_skipped:
+            return []
+        names = [n.name for n in skipped_managers(sender.node, target.node)]
+        for n in names:
+            ctx.inboxes[n].append(f"[cc] {sender.name} -> {target.name}: {text}")
+        return names
+
+    async def _t_send_message(self, agent: "Agent", args: dict) -> str:
+        ctx = self.ctx
+        target, kind = self._check_contact(agent, args["to"])
+        text = args["text"][:4000]
+        ctx.inboxes[target.name].append(f"[Message from {agent.name} ({agent.spec.role})]: {text}")
+        cc = self._cc(agent, target, text)
+        ctx.event(agent, "message", {"to": target.name, "kind": kind, "chars": len(text), "cc": cc,
+                                     "preview": text[:240]})
+        status = "" if target.name in ctx.active else f" ({target.name} is not working right now and will see it if they get another assignment.)"
+        return f"Delivered to {target.name}'s inbox.{status}"
+
+    async def _t_ask(self, agent: "Agent", args: dict) -> str:
+        ctx = self.ctx
+        target, kind = self._check_contact(agent, args["to"])
+        question = args["question"][:4000]
+        inverse, _ = relation(target.node, agent.node)
+        provider = ctx.registry.provider_for(target.model)
+        if target.conv is not None:
+            conv = target.conv.fork()
+        else:
+            specs = tool_specs(target, ctx)
+            conv = provider.new_conversation(system_prompt(target, ctx), specs)
+        conv.add_user(question_message(agent, inverse, question))
+        max_tokens = ctx.budget.plan_call(target.model, conv.approx_input_tokens(),
+                                          min(target.spec.output_cap(), ANSWER_TOKENS))
+        ctx.live(target, "answering", {"from": agent.name})
+        gate = ctx.registry.gate_for(target.model)
+        queued = await gate.acquire()
+        try:
+            result = await provider.step(conv, target.model, max_tokens=max_tokens, effort=target.spec.effort)
+            if not result.text and result.tool_calls:  # it tried to use tools; ask once more with tools off
+                ctx.budget.charge(target.model.cost(result.usage))
+                ctx.log_call(target, result, target.model.cost(result.usage), -1, max_tokens, purpose="answer")
+                conv.add_tool_results([ToolResult(c.id, "Tools are disabled here; answer in text.", True)
+                                       for c in result.tool_calls])
+                result = await provider.step(conv, target.model, max_tokens=max_tokens, effort=target.spec.effort,
+                                             tool_choice="none")
+        except ProviderError as e:
+            raise ToolError(f"{target.name} could not answer: {e}")
+        finally:
+            gate.release()
+            ctx.live(target, "working" if target.name in ctx.active else "idle", {})
+        result.rate_wait_s += queued
+        cost = target.model.cost(result.usage)
+        ctx.budget.charge(cost)
+        ctx.log_call(target, result, cost, -1, max_tokens, purpose="answer")
+        answer = result.text.strip() or f"[{target.name} gave no answer]"
+        ctx.inboxes[target.name].append(
+            f"[FYI] In a side conversation, {agent.name} asked you: {question[:500]}\nYou answered: {answer[:800]}")
+        cc = self._cc(agent, target, f"Q: {question[:500]} / A: {answer[:500]}")
+        ctx.event(agent, "ask", {"to": target.name, "kind": kind, "chars": len(question), "answer_chars": len(answer),
+                                 "cc": cc, "preview": question[:240], "answer_preview": answer[:240]})
+        return f"Answer from {target.name}: {answer}"
+
+    # ---- wikis ----
+    def _wiki(self, agent: "Agent", wiki_id: str, write: bool = False):
+        for inst, can_write in self.ctx.wiki_access(agent):
+            if inst.id == wiki_id:
+                if write and not can_write:
+                    raise ToolError(f"you can read but not write {wiki_id}")
+                return inst, self.ctx.wiki_pages.setdefault(wiki_id, {})
+        raise ToolError(f"no access to wiki {wiki_id}")
+
+    async def _t_wiki_read(self, agent, args) -> str:
+        inst, pages = self._wiki(agent, args["wiki"])
+        page = (args.get("page") or "").strip()
+        if not page:
+            self.ctx.event(agent, "wiki_read", {"wiki": inst.id, "page": None})
+            if not pages:
+                return f"{inst.id} has no pages yet."
+            return f"Pages in {inst.id}:\n" + "\n".join(
+                f"- {title} (by {p['author']}, v{p['version']}, {len(p['content'])} chars)" for title, p in pages.items())
+        p = pages.get(page) or next((v for k, v in pages.items() if k.lower() == page.lower()), None)
+        if p is None:
+            raise ToolError(f"no page {page!r} in {inst.id}; call wiki_read without a page to list pages")
+        self.ctx.event(agent, "wiki_read", {"wiki": inst.id, "page": page})
+        return f"# {page} (v{p['version']}, last edited by {p['author']})\n\n{truncate(p['content'], MAX_READ)}"
+
+    async def _t_wiki_search(self, agent, args) -> str:
+        inst, pages = self._wiki(agent, args["wiki"])
+        terms = set(tokenize(args["query"]))
+        scored = []
+        for title, p in pages.items():
+            words = tokenize(title + " " + p["content"])
+            score = sum(words.count(t) for t in terms)
+            if score:
+                scored.append((score, title, p))
+        scored.sort(key=lambda x: (-x[0], x[1]))
+        self.ctx.event(agent, "wiki_read", {"wiki": inst.id, "query": args["query"][:100]})
+        if not scored:
+            return "No matching pages."
+        return "\n".join(f"- {t}: {p['content'][:160]}..." for _, t, p in scored[:8])
+
+    async def _t_wiki_write(self, agent, args) -> str:
+        inst, pages = self._wiki(agent, args["wiki"], write=True)
+        page = args["page"].strip()[:120]
+        content = args["content"]
+        existing = pages.get(page)
+        if args.get("append") and existing:
+            content = existing["content"] + "\n\n" + content
+        if len(content) > MAX_WIKI_PAGE:
+            raise ToolError(f"page too long ({len(content)} chars; limit {MAX_WIKI_PAGE})")
+        pages[page] = {"content": content, "author": agent.name, "version": (existing or {}).get("version", 0) + 1}
+        self.ctx.event(agent, "wiki_write", {"wiki": inst.id, "page": page, "chars": len(content),
+                                             "preview": args["content"][:200]})
+        return f"Saved {inst.id} / {page} (v{pages[page]['version']})."
 
     # ---- workspace ----
     def _path(self, rel: str) -> Path:
@@ -222,16 +389,5 @@ class Toolbox:
             raise ToolError(f"no document {args['doc_id']!r}; use search_docs to find ids")
         return f"{doc.doc_id} | {doc.title}\n\n{doc.text}"
 
-    # ---- boards ----
-    async def _t_post_note(self, agent, args) -> str:
-        note = f"[{agent.name}] {args['text'][:2000]}"
-        for key in self.ctx.board_keys(agent):
-            self.ctx.boards.setdefault(key, []).append(note)
-        self.ctx.event(agent, "note", {"chars": len(note)})
-        return "Posted."
 
-    async def _t_read_notes(self, agent, args) -> str:
-        notes = []
-        for key in self.ctx.board_keys(agent):
-            notes += [n for n in self.ctx.boards.get(key, []) if n not in notes]
-        return truncate("\n".join(notes[-60:])) or "(board is empty)"
+__all__ = ["KIND_LABELS", "Toolbox", "ToolError", "tool_specs", "validate_args"]

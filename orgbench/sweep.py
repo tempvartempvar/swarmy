@@ -96,8 +96,8 @@ def plan_sweep(cfg: SweepConfig, base: Path, catalog: Catalog) -> list[PlannedRu
     orgs: list[tuple[OrgConfig, float | None]] = []
     for entry in cfg.orgs:
         for org in entry.build(base):
-            for lvl in org.levels:
-                catalog.resolve(lvl.model)  # fail early on unknown models
+            for model in {n.settings.model for n in org.nodes()}:
+                catalog.resolve(model)  # fail early on unknown models
             orgs.append((org, entry.run_budget_usd))
     names = [o.name for o, _ in orgs]
     dupes = {n for n in names if names.count(n) > 1}
@@ -119,12 +119,18 @@ def describe_plan(cfg: SweepConfig, runs: list[PlannedRun], catalog: Catalog, tr
     lines.append(f"\n{'org':34} {'shape':16} {'agents':>6} {'cap/run':>8}  structure")
     for name, (org, cap) in seen.items():
         lines.append(f"{name[:34]:34} {org.shape:16} {org.n_agents:>6} {f'${cap:.3f}':>8}  {org.describe()}")
-        for lvl in org.levels:
-            spec = catalog.resolve(lvl.model)
+        wikis = ", ".join(f"{w.name}({w.scope})" for w in org.knowledge.wikis) or "none"
+        if org.knowledge.wikis or org.communication.enabled:
+            lines.append(f"{'':34}   wikis: {wikis} | contact: {org.communication_summary()}")
+        seen_settings = {}
+        for n in org.nodes():
+            seen_settings.setdefault((n.role, n.settings.model, n.settings.output_cap()), n.settings)
+        for (role, model, cap_tokens), _ in seen_settings.items():
+            spec = catalog.resolve(model)
             inp, out, _, cw = spec.price.rates(4000)
-            one_call = 4000 * max(inp, cw) + lvl.output_cap() * out
+            one_call = 4000 * max(inp, cw) + cap_tokens * out
             if one_call > cap * 0.5:
-                lines.append(f"{'':34}   ! a single {lvl.role} call can cost up to ${one_call:.3f}; the run cap "
+                lines.append(f"{'':34}   ! a single {role} call can cost up to ${one_call:.3f}; the run cap "
                              f"will clamp its max_tokens")
     tasks = sorted({r.task.task_id for r in runs})
     lines.append(f"\ntasks ({len(tasks)}): " + ", ".join(tasks))
@@ -162,7 +168,7 @@ async def run_sweep(cfg: SweepConfig, base: Path, *, catalog: Catalog, mock: boo
         m = pr.org.metrics()
         tracer.save_run({"run_id": new_id("run"), "sweep_id": sweep_id, "org_name": pr.org.name,
                          "org_json": pr.org.model_dump_json(), "shape": m["shape"], "depth": m["depth"],
-                         "n_agents": m["n_agents"], "n_workers": m["n_workers"], "communication": pr.org.communication,
+                         "n_agents": m["n_agents"], "n_workers": m["n_workers"], "communication": pr.org.communication_summary(),
                          "task_id": pr.task.task_id, "family": pr.task.family, "task_params": json.dumps(pr.task.params),
                          "seed": pr.task.seed, "rep": pr.rep, "status": status, "cost_usd": 0.0,
                          "budget_cap": pr.cap, "mock": int(mock), "started_at": time.time()})

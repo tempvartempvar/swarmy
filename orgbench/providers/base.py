@@ -62,6 +62,9 @@ class StepResult:
     fallback: bool = False
 
 
+PENDING_RESULT = "(still in progress - this is a side conversation, not the result)"
+
+
 class ProviderError(Exception):
     """A call failed after retries. The agent reports the failure; the run continues."""
 
@@ -82,6 +85,11 @@ class Conversation(ABC):
     @abstractmethod
     def add_tool_results(self, results: list[ToolResult]) -> None: ...
 
+    @abstractmethod
+    def fork(self) -> "Conversation":
+        """A copy for a side conversation (e.g. answering a colleague's question). Any tool calls
+        still in flight get placeholder results so the copy can take a new user message."""
+
     def approx_input_tokens(self) -> int:
         # Conservative (over-)estimate used only for the budget guard.
         return int(self.chars / 3) + 200
@@ -95,7 +103,8 @@ class Provider(ABC):
 
     @abstractmethod
     async def step(
-        self, conv: Conversation, spec: ModelSpec, *, max_tokens: int, effort: str | None
+        self, conv: Conversation, spec: ModelSpec, *, max_tokens: int, effort: str | None,
+        tool_choice: str | None = None,
     ) -> StepResult: ...
 
     async def aclose(self) -> None:

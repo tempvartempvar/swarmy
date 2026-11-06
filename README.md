@@ -11,8 +11,15 @@ ceo (opus, max) ─┬─ c-suite-1 (opus, medium) ─┬─ director-1.1 (sonne
                  ...                           ...                       ...
 ```
 
-- **Any model at any level.** Claude goes through the Anthropic API; everything else goes through
-  OpenRouter. Swap models from the CLI, in YAML, or as a sweep matrix.
+- **A visual org designer.** `orgbench ui` opens an interactive org chart in your browser. You can
+  swap any position's model, add or remove positions and management layers, define wikis and
+  communication rules, and watch a test run move through the org live.
+- **Any model at any position.** Claude goes through the Anthropic API; everything else goes through
+  OpenRouter. Swap models in the designer, from the CLI, in YAML, or as a sweep matrix.
+- **Knowledge sharing and communication as variables.** Wikis can be scoped to the whole org, each
+  department or each team, with read and write permissions. Direct contact (manager to report,
+  between teammates, across teams, skip-level, or fully open) can be switched on with rules such as
+  copying the skipped managers.
 - **Flatness is a parameter.** You can generate orgs with the same number of workers and different
   depths, compare against single-agent baselines, and use a same-model control to separate the
   effect of structure from the effect of the model mix.
@@ -32,6 +39,12 @@ pip install -e '.[dev]'
 cp .env.example .env        # add ANTHROPIC_API_KEY and OPENROUTER_API_KEY
 ```
 
+Open the designer:
+
+```bash
+orgbench ui                  # http://127.0.0.1:8765
+```
+
 Check everything offline first. The scripted mock provider runs the whole pipeline without
 making any API calls:
 
@@ -49,6 +62,40 @@ orgbench sweep configs/sweeps/smoke.yaml     # asks for confirmation before spen
 orgbench report                              # latest sweep -> results/reports/<name>-<id>/report.md
 ```
 
+## Org designer
+
+```bash
+orgbench ui [--port 8765] [--orgs-dir configs/orgs]
+```
+
+- **Chart.** Each level is a horizontal band. A card shows the position's title, name, model
+  (coloured by family) and effort, plus counts of the wikis (▤) and contacts (⇄) it has. Drag to pan,
+  scroll to zoom, collapse subtrees, and use **Stack teams** to put each team's workers in a column
+  so wide orgs stay readable.
+- **Position tab.** Click a card to see who the position reports to, its direct reports, its rough
+  cost per call, its wiki access and who it can contact. You can change its model, effort, limits,
+  title, name and role notes. The scope switch applies an edit to this position only, the whole
+  level, or every position with the same title. Structure buttons add a direct report, duplicate the
+  position (with its team), insert a manager above it, or remove it.
+- **Structure tab.** Change how many reports each manager at a level has (− / +), insert a
+  management layer below a level (each manager's reports are split among new managers), remove a
+  level, edit a whole level at once, or build a balanced org from a few numbers.
+- **Knowledge tab.** Add wikis and set their scope, who can read and write them, oversight, and
+  whether the client's brief is posted on them. Selecting a wiki outlines each instance on the chart
+  and marks who can write (solid border) and who can only read (dashed border).
+- **Communication tab.** Toggle the contact rules and set the skip-level distance. Selecting a
+  position draws a line to every colleague it may contact, coloured by type.
+- **Test run tab.** Run the org on a task, in mock mode or with real models under a hard budget, and
+  watch it live. Agents light up while they think, wait or answer; assignments and reports flash
+  along the edges; messages arc between cards; and an activity feed shows assignments, reports,
+  questions with their answers, and wiki edits as they happen.
+- **Save** writes `configs/orgs/<name>.yaml`, using the compact `levels` form when the tree is
+  uniform and an explicit `tree` otherwise. **YAML** shows the config and lets you paste one in.
+  Undo and redo cover every edit.
+
+The designer gets everything it shows (names, metrics, contacts, wiki membership) from the same
+code the engine runs, so the chart always matches what the agents will do.
+
 ## Org configs
 
 ```yaml
@@ -64,9 +111,72 @@ levels:                     # top to bottom; every node in a level shares its se
     span: 3
   - role: worker            # bottom level: span 0, does the hands-on work
     model: gpt-oss-120b
-communication: tree         # tree | team_board | global_board (adds post_note/read_notes)
 memory: persistent          # persistent: an agent remembers earlier assignments; fresh: starts clean each time
 ```
+
+For uneven structures or per-position models, write an explicit `tree` instead of `levels`
+(see `configs/orgs/research-lab.yaml`):
+
+```yaml
+tree:
+  role: director
+  model: sonnet
+  children:
+    - role: lead
+      name: research-lead          # optional custom name (default: <role>-<path>, e.g. lead-1)
+      model: haiku
+      children: [{role: researcher, model: gpt-oss-120b}, {role: researcher, model: qwen-flash}]
+    - {role: engineer, model: haiku}
+```
+
+### Knowledge sharing
+
+```yaml
+knowledge:
+  wikis:
+    - name: handbook
+      scope: org              # org | department | team
+      write: managers         # who can write: all | managers | workers
+      read: all               # who can read
+      publish_brief: true     # post the client's original assignment on it
+      description: Plans and decisions from management.
+    - name: team-notes
+      scope: team             # one wiki per team: a manager plus their direct reports
+      oversight: true         # managers above the team can read it (default)
+    - name: division
+      scope: department
+      level: 1                # one wiki per level-1 position, shared by everyone under it
+```
+
+Agents get `wiki_read`, `wiki_search` and (where permitted) `wiki_write` for the wikis they can
+reach. Their prompt lists each wiki and its scope. Final wiki contents are saved with each run.
+
+### Communication rules
+
+Assignments always flow down the tree (`delegate`) and reports flow up (`submit`). These rules add
+direct contact, and all of them are off by default:
+
+```yaml
+communication:
+  chain: true          # manager <-> direct report, mid-assignment
+  peers: true          # teammates (same manager)
+  cross_team: false    # same level, different manager
+  open: false          # anyone may contact anyone
+  skip_up: 1           # may contact up to 1 level above their own manager
+  skip_down: 0         # managers may contact up to N levels below their direct reports
+  cc_skipped: true     # skipped managers get a copy of skip-level traffic
+  modes: [ask, message]
+  max_messages: 8      # per agent per run
+```
+
+- `ask` asks a colleague a question and waits for the answer. The colleague answers in a side
+  conversation forked from their own history, so the answer reflects what they actually know; their
+  main work isn't interrupted, and they get an FYI note about the exchange.
+- `send_message` leaves a note that the recipient sees the next time they act. Notes that are never
+  read are counted as `undelivered`.
+
+Each agent's tools list exactly the colleagues it may contact, and its prompt says how each one
+relates to it (manager, teammate, skip-level and so on).
 
 Optional level fields: `max_tokens`, `max_turns`, `can_do_work` (gives managers hands-on
 tools as well), `review_tools` (lets managers read the workspace and run the public tests;
@@ -85,7 +195,7 @@ orgbench org configs/orgs/corporate-5tier.yaml
 orgbench run --org configs/orgs/corporate-5tier.yaml --task code \
     --model worker=openrouter:qwen/qwen3.7-flash --model ceo=sonnet --effort director=high
 # any field, by dotted path
-orgbench run --org configs/orgs/two-tier.yaml --task qa:kind=aggregate --set levels.1.span=4 --set communication=team_board
+orgbench run --org configs/orgs/two-tier.yaml --task qa:kind=aggregate --set levels.1.span=4 --set communication.peers=true
 ```
 
 In a sweep, `models:`, `efforts:` and `set:` apply fixed overrides, and `matrix:` expands into
@@ -198,6 +308,7 @@ These assume about 8k prompt tokens (mostly cached) and 1.5k output tokens:
 | `pilot` | flatness with a realistic model mix (Sonnet lead, Haiku managers, cheap workers) at 4 workers | 16 |
 | `model-swap` | same structure; worker model × lead effort | 12 |
 | `corporate-ladder` | the full Opus→Opus→Sonnet→Haiku→worker ladder, flattened step by step at 8 workers | 4 |
+| `communication` | **same structure and model, different information flow**: strict tree vs team wiki vs org wiki vs peers vs skip-level vs open | 36 |
 
 ## Metrics (in `report.md`, `runs.csv`, `levels.csv`)
 
@@ -214,6 +325,9 @@ These assume about 8k prompt tokens (mostly cached) and 1.5k output tokens:
 - **review gain** (code/mixed): final score minus the score when the top agent's first round of
   delegation came back. This measures whether review at the top caught errors.
 - **parallelism**: total model time divided by wall time.
+- **messages / asks / skip-level**: direct contacts outside delegate/report, and how many of them
+  bypassed a manager. **answer $** is the share of spend on answering colleagues' questions.
+- **wiki writes / reads**: knowledge-base use. **undelivered**: inbox notes nobody read.
 - **rate_wait_s**: time spent queued or backing off on rate limits, recorded separately from model
   latency.
 - **nudges, turn limits, tool errors, agent errors, fallback calls**: failure modes, mostly of the
@@ -234,8 +348,10 @@ broken down by task family.
   the report. Differences inside the CI are noise.
 - **Use a fixed baseline.** Include `solo-*` orgs, a single strong agent and a single cheap worker,
   so the structures have something to beat.
-- **Keep prompts constant.** Role prompts come from one template, and only facts about the org's
-  shape change between structures. If you add `prompt:` to a level, apply the same text to every
+- **Isolate information flow.** The `communication` sweep keeps structure and models fixed and
+  varies only wikis and contact rules.
+- **Keep prompts constant.** Role prompts come from one template, and only facts about the org
+  (shape, the agent's position, its wikis and contacts) change between structures. If you add `prompt:` to a level, apply the same text to every
   structure you compare.
 
 ## Results layout
@@ -245,6 +361,7 @@ results/
   orgbench.db                       # sweeps, runs, calls, events (SQLite)
   runs/<run_id>/transcript.jsonl    # every input, step (text, thinking summary, tool calls) and tool result
   runs/<run_id>/workspace/          # final shared workspace
+  runs/<run_id>/wikis/              # final wiki pages, one folder per wiki instance
   runs/<run_id>/result.json         # grade and per-node cost and calls
   reports/<sweep>-<id>/             # report.md, charts, runs.csv, levels.csv, summary.json
 ```

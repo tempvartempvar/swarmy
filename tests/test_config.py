@@ -11,8 +11,8 @@ def test_example_orgs_load_and_resolve():
     assert files
     for f in files:
         org = load_org(f)
-        for lvl in org.levels:
-            catalog.resolve(lvl.model)
+        for node in org.nodes():
+            catalog.resolve(node.settings.model)
 
 
 def test_corporate_metrics():

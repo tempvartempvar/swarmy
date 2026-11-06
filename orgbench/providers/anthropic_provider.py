@@ -9,6 +9,7 @@ import anthropic
 
 from ..catalog import ModelSpec
 from .base import (
+    PENDING_RESULT,
     Conversation,
     FatalProviderError,
     Provider,
@@ -58,6 +59,16 @@ class AnthropicConversation(Conversation):
             blocks.append(block)
         self._append_user_blocks(blocks)
 
+    def fork(self) -> "AnthropicConversation":
+        new = AnthropicConversation.__new__(AnthropicConversation)
+        new.system, new.tool_specs, new.tools, new.chars = self.system, self.tool_specs, self.tools, self.chars
+        new.messages = [{"role": m["role"], "content": list(m["content"])} for m in self.messages]
+        if new.messages and new.messages[-1]["role"] == "assistant":
+            pending = [b.id for b in new.messages[-1]["content"] if getattr(b, "type", "") == "tool_use"]
+            if pending:
+                new.add_tool_results([ToolResult(i, PENDING_RESULT) for i in pending])
+        return new
+
     def add_assistant(self, content: list) -> None:
         for block in content:
             try:
@@ -79,7 +90,8 @@ class AnthropicProvider(Provider):
     def new_conversation(self, system: str, tools: list[ToolSpec]) -> AnthropicConversation:
         return AnthropicConversation(system, tools)
 
-    async def step(self, conv, spec: ModelSpec, *, max_tokens: int, effort: str | None) -> StepResult:
+    async def step(self, conv, spec: ModelSpec, *, max_tokens: int, effort: str | None,
+                   tool_choice: str | None = None) -> StepResult:
         assert isinstance(conv, AnthropicConversation)
         params: dict = {
             "model": spec.model,
@@ -92,6 +104,8 @@ class AnthropicProvider(Provider):
         }
         if conv.tools:
             params["tools"] = conv.tools
+            if tool_choice == "none":
+                params["tool_choice"] = {"type": "none"}
         if spec.thinking == "adaptive":
             params["thinking"] = {"type": "adaptive", "display": spec.thinking_display}
         effort = spec.map_effort(effort)

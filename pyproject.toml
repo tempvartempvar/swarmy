@@ -25,5 +25,8 @@ orgbench = "orgbench.cli:main"
 [tool.setuptools.packages.find]
 include = ["orgbench*"]
 
+[tool.setuptools.package-data]
+"orgbench.ui" = ["static/*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,0 +1,41 @@
+# An explicit (uneven) tree with knowledge sharing and communication rules.
+# Open it in the designer with `orgbench ui`, or run it:
+#   orgbench run --org configs/orgs/research-lab.yaml --task mixed --budget 1
+name: research-lab
+description: Uneven lab with a shared handbook, team wikis, and skip-level questions allowed
+tree:
+  role: director
+  model: sonnet
+  effort: medium
+  children:
+    - role: lead
+      name: research-lead
+      model: haiku
+      prompt: You own fact-finding. Make sure findings are written to the wiki before reporting.
+      children:
+        - {role: researcher, model: gpt-oss-120b}
+        - {role: researcher, model: gpt-oss-120b}
+        - {role: researcher, model: qwen-flash}
+    - role: lead
+      name: engineering-lead
+      model: haiku
+      children:
+        - {role: engineer, model: gpt-oss-120b}
+        - {role: engineer, model: haiku}
+knowledge:
+  wikis:
+    - name: handbook
+      scope: org
+      write: managers
+      publish_brief: true
+      description: Plans, decisions and interfaces set by management.
+    - name: team-notes
+      scope: team
+      description: Working notes for each team.
+communication:
+  chain: true
+  peers: true
+  skip_up: 1
+  cc_skipped: true
+  modes: [ask, message]
+  max_messages: 6

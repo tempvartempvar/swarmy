@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from .catalog import Catalog, ModelSpec, Price
-from .config import LevelSpec, OrgConfig
+from .config import Node, NodeSettings, OrgConfig
 from .prompts import NUDGE, system_prompt
 from .providers import ProviderError, ToolResult
 from .tools import tool_specs, validate_args
@@ -17,10 +17,11 @@ MAX_NUDGES = 2
 
 
 class Agent:
-    def __init__(self, name: str, level: int, spec: LevelSpec, model: ModelSpec, parent: "Agent | None"):
-        self.name = name
-        self.level = level
-        self.spec = spec
+    def __init__(self, node: Node, model: ModelSpec, parent: "Agent | None"):
+        self.node = node
+        self.name = node.name
+        self.level = node.depth
+        self.spec: NodeSettings = node.settings
         self.model = model
         self.parent = parent
         self.children: list[Agent] = []
@@ -37,21 +38,39 @@ class Agent:
         for c in self.children:
             yield from c.walk()
 
+    def _deliver_inbox(self, ctx: "RunContext") -> None:
+        pending = ctx.inboxes.pop(self.name, [])
+        if pending:
+            self.conv.add_user("Messages received:\n" + "\n\n".join(pending))
+            ctx.event(self, "inbox", {"count": len(pending)})
+
     async def handle(self, text: str, ctx: "RunContext") -> dict:
         """Work on one assignment until `submit` (or a limit). Returns {report, answer, status}."""
+        ctx.active.add(self.name)
+        ctx.live(self, "working", {})
+        try:
+            result = await self._handle(text, ctx)
+        finally:
+            ctx.active.discard(self.name)
+        ctx.live(self, "done", {"status": result["status"]})
+        return result
+
+    async def _handle(self, text: str, ctx: "RunContext") -> dict:
         provider = ctx.registry.provider_for(self.model)
         if self.conv is None or ctx.org.memory == "fresh":
             specs = tool_specs(self, ctx)
             self.specs = {s.name: s for s in specs}
-            self.conv = provider.new_conversation(system_prompt(self, ctx.org, ctx.task), specs)
+            self.conv = provider.new_conversation(system_prompt(self, ctx), specs)
         self.conv.add_user(text)
         ctx.transcript.write(node=self.name, kind="input", text=text)
 
         nudges, last_text = 0, ""
         for turn in range(self.max_turns(ctx.org)):
+            self._deliver_inbox(ctx)
             max_tokens = ctx.budget.plan_call(self.model, self.conv.approx_input_tokens(), self.spec.output_cap())
             gate = ctx.registry.gate_for(self.model)
             queued = await gate.acquire()
+            ctx.live(self, "thinking", {})
             try:
                 result = await provider.step(self.conv, self.model, max_tokens=max_tokens, effort=self.spec.effort)
             except ProviderError as e:
@@ -65,6 +84,7 @@ class Agent:
             cost = self.model.cost(result.usage)
             ctx.budget.charge(cost)
             ctx.log_call(self, result, cost, turn, max_tokens)
+            ctx.live(self, "working", {"tools": [c.name for c in result.tool_calls]})
             ctx.transcript.write(
                 node=self.name, kind="step", turn=turn, text=result.text, thinking=result.thinking[:4000],
                 tool_calls=[{"name": c.name, "args": _clip(c.arguments)} for c in result.tool_calls],
@@ -125,21 +145,19 @@ def _clip(args: dict, n: int = 1500) -> dict:
 
 
 def build_tree(org: OrgConfig, catalog: Catalog, mock: bool = False) -> Agent:
-    def resolve(level: LevelSpec) -> ModelSpec:
-        spec = catalog.resolve(level.model)
-        if mock and spec.provider != "mock":
-            spec = spec.model_copy(update={"price": Price(input=0, output=0)})
-        return spec
+    resolved: dict[str, ModelSpec] = {}
 
-    resolved = [resolve(lvl) for lvl in org.levels]
+    def resolve(name: str) -> ModelSpec:
+        if name not in resolved:
+            spec = catalog.resolve(name)
+            if mock and spec.provider != "mock":
+                spec = spec.model_copy(update={"price": Price(input=0, output=0)})
+            resolved[name] = spec
+        return resolved[name]
 
-    def make(level: int, parent: Agent | None, path: str) -> Agent:
-        spec = org.levels[level]
-        name = spec.role if level == 0 else f"{spec.role}-{path}"
-        agent = Agent(name, level, spec, resolved[level], parent)
-        if level < len(org.levels) - 1:
-            for i in range(spec.span):
-                agent.children.append(make(level + 1, agent, f"{path}.{i + 1}" if path else str(i + 1)))
+    def make(node: Node, parent: Agent | None) -> Agent:
+        agent = Agent(node, resolve(node.settings.model), parent)
+        agent.children = [make(c, agent) for c in node.children]
         return agent
 
-    return make(0, None, "")
+    return make(org.root, None)
