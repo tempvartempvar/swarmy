@@ -1,21 +1,45 @@
-"""Wiki storage with full revision history.
+"""Wikis stored in git.
 
-Every edit is kept as a revision recording who made it: their name, rank (role), level and
-model, plus the time into the run. Agents see the latest version along with its contributors.
-Humans can browse everything afterwards: `wikis/wikis.json` plus one Markdown file per page in
-each run directory, `swarmy wiki <run>` on the command line, and the wiki browser in `swarmy ui`.
+Each run's wikis live in one git repository (`runs/<run_id>/wiki/`), with a folder per wiki and one
+Markdown file per page. Every edit is a commit:
+
+    author   captain-1.2 (captain) <captain-1.2@swarmy.local>
+    message  <edit summary>
+             Swarmy-Wiki: unit-log/captain-1
+             Swarmy-Page: Zone facts
+             Swarmy-Role: captain
+             Swarmy-Level: 2
+             Swarmy-Model: deepseek-flash
+             Swarmy-Mode: replace
+             Swarmy-T: 12.3
+
+So history, diffs and blame come from git itself, and humans can browse a run's wikis with any git
+tool (`git -C results/runs/<run_id>/wiki log`, VS Code, GitHub...) as well as in the run explorer
+and with `swarmy wiki`. Git access goes through dulwich (pure Python), so no git binary is needed.
+Diffs use difflib; pages are rendered with markdown-it-py (see swarmy/markdown.py).
 """
 
 from __future__ import annotations
 
+import difflib
 import json
+import re
 import threading
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from dulwich import porcelain
+from dulwich.object_store import tree_lookup_path
+from dulwich.repo import Repo
+
+from .markdown import to_html
 from .rules import WikiInstance
 from .tasks.base import tokenize
+
+META_FILE = ".swarmy/wikis.json"
+COMMITTER = b"swarmy <swarmy@swarmy.local>"
+TRAILER = re.compile(r"^Swarmy-([A-Za-z]+): ?(.*)$")
 
 
 @dataclass
@@ -26,24 +50,22 @@ class Revision:
     level: int | None  # depth in the hierarchy (0 = top)
     model: str | None
     mode: str  # create | replace | append
-    content: str
     t: float  # seconds since the run started
     chars_delta: int = 0
-    summary: str = ""  # edit summary, like a wiki's "what changed and why"
+    summary: str = ""  # edit summary: what changed and why
+    sha: str = ""  # git commit
 
 
 @dataclass
 class Page:
     title: str
+    path: str  # path inside the repository
+    content: str = ""
     revisions: list[Revision] = field(default_factory=list)
 
     @property
     def current(self) -> Revision:
         return self.revisions[-1]
-
-    @property
-    def content(self) -> str:
-        return self.current.content
 
     def contributors(self) -> list[tuple[str, str, int]]:
         """(author, role, number of edits), in order of first contribution."""
@@ -58,38 +80,47 @@ class Page:
         return f"v{cur.version}, last edited by {cur.author} ({cur.role}{lvl})"
 
 
-class WikiStore:
-    def __init__(self, instances: list[WikiInstance]):
-        self.instances = {i.id: i for i in instances}
-        self.pages: dict[str, dict[str, Page]] = {i.id: {} for i in instances}
-        self.t0 = time.time()
-        self._lock = threading.Lock()
+def _slug(title: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:60] or "page"
 
+
+def _instance_meta(inst: WikiInstance) -> dict:
+    return {"id": inst.id, "name": inst.spec.name, "scope": inst.spec.scope, "label": inst.label(),
+            "owner": inst.owner, "description": inst.spec.description, "members": inst.members,
+            "readers": sorted(inst.readers), "writers": sorted(inst.writers)}
+
+
+class WikiStore:
+    """The wikis of one run: an in-memory index of current pages over a git repository."""
+
+    def __init__(self, instances: list[WikiInstance] | list[dict], root: Path, *, create: bool = True):
+        self.root = Path(root).resolve()  # dulwich reads relative paths against the cwd, not the repo
+        self.meta = [i if isinstance(i, dict) else _instance_meta(i) for i in instances]
+        self.pages: dict[str, dict[str, Page]] = {m["id"]: {} for m in self.meta}
+        self.t0 = time.time()
+        self._lock = threading.RLock()
+        if create:
+            self.root.mkdir(parents=True, exist_ok=True)
+            self.repo = Repo.init(str(self.root))
+            meta_path = self.root / META_FILE
+            meta_path.parent.mkdir(parents=True, exist_ok=True)
+            meta_path.write_text(json.dumps({"instances": self.meta, "t0": self.t0}, indent=1))
+            (self.root / "README.md").write_text(
+                "# Wikis of this run\n\nEach folder is one wiki (scoped to the whole org, a division or a unit); "
+                "each Markdown file is a page. Every edit is a commit whose author is the agent and its rank, and "
+                "whose message is the edit summary. Try `git log --format='%h %an: %s'`.\n")
+            porcelain.add(self.repo, paths=[str(meta_path), str(self.root / "README.md")])
+            self._commit(b"Initialize wikis", COMMITTER)
+        else:
+            self.repo = Repo(str(self.root))
+
+    # ---- reading the index ----
     def find(self, wiki_id: str, title: str) -> Page | None:
         pages = self.pages.get(wiki_id, {})
         if title in pages:
             return pages[title]
         low = title.strip().lower()
         return next((p for t, p in pages.items() if t.lower() == low), None)
-
-    def write(self, wiki_id: str, title: str, content: str, *, author: str, role: str, level: int | None,
-              model: str | None, append: bool = False, summary: str = "") -> Revision:
-        with self._lock:
-            page = self.find(wiki_id, title)
-            if page is None:
-                page = Page(title=title.strip()[:120])
-                self.pages.setdefault(wiki_id, {})[page.title] = page
-                mode, new = "create", content
-            elif append:
-                mode, new = "append", page.content + "\n\n" + content
-            else:
-                mode, new = "replace", content
-            prev = len(page.content) if page.revisions else 0
-            rev = Revision(version=len(page.revisions) + 1, author=author, role=role, level=level, model=model,
-                           mode=mode, content=new, t=round(time.time() - self.t0, 2), chars_delta=len(new) - prev,
-                           summary=summary.strip()[:300])
-            page.revisions.append(rev)
-            return rev
 
     def search(self, wiki_id: str, query: str) -> list[Page]:
         terms = set(tokenize(query))
@@ -102,41 +133,171 @@ class WikiStore:
         scored.sort(key=lambda x: (-x[0], x[1]))
         return [p for _, _, p in scored]
 
-    # ---- export ----
-    def to_json(self) -> dict:
+    # ---- writing: one commit per edit ----
+    def write(self, wiki_id: str, title: str, content: str, *, author: str, role: str, level: int | None,
+              model: str | None, append: bool = False, summary: str = "") -> Revision:
+        title = " ".join(title.split())[:120]  # one line: titles and summaries go into commit messages
+        summary = " ".join(summary.split())[:300]
         with self._lock:
-            instances = []
-            for inst in self.instances.values():
-                pages = list(self.pages.get(inst.id, {}).values())
-                instances.append({
-                    "id": inst.id, "name": inst.spec.name, "scope": inst.spec.scope, "label": inst.label(),
-                    "owner": inst.owner, "description": inst.spec.description, "members": inst.members,
-                    "readers": sorted(inst.readers), "writers": sorted(inst.writers),
-                    "pages": [{"title": p.title, "revisions": [asdict(r) for r in p.revisions]} for p in pages],
-                })
-            return {"instances": instances}
+            page = self.find(wiki_id, title)
+            if page is None:
+                taken = {p.path for p in self.pages.get(wiki_id, {}).values()}
+                path, n = f"{wiki_id}/{_slug(title)}.md", 2
+                while path in taken:
+                    path, n = f"{wiki_id}/{_slug(title)}-{n}.md", n + 1
+                page = Page(title=title, path=path)
+                self.pages.setdefault(wiki_id, {})[title] = page
+                mode, new = "create", content
+            elif append:
+                mode, new = "append", page.content + "\n\n" + content
+            else:
+                mode, new = "replace", content
+            prev = len(page.content) if page.revisions else 0
+            t = round(time.time() - self.t0, 2)
+            file = self.root / page.path
+            file.parent.mkdir(parents=True, exist_ok=True)
+            file.write_text(new)
+            porcelain.add(self.repo, paths=[str(file)])
+            trailers = {"Wiki": wiki_id, "Page": page.title, "Role": role, "Level": "" if level is None else level,
+                        "Model": model or "", "Mode": mode, "T": t}
+            message = (summary or f"{mode.capitalize()} {page.title}") + "\n\n" + "\n".join(
+                f"Swarmy-{k}: {v}" for k, v in trailers.items())
+            who = f"{author} ({role}) <{re.sub(r'[^A-Za-z0-9._-]', '_', author)}@swarmy.local>".encode()
+            sha = self._commit(message.encode(), who)
+            rev = Revision(version=len(page.revisions) + 1, author=author, role=role, level=level, model=model,
+                           mode=mode, t=t, chars_delta=len(new) - prev, summary=summary, sha=sha.decode())
+            page.content = new
+            page.revisions.append(rev)
+            return rev
 
-    def save(self, out: Path) -> None:
-        data = self.to_json()
-        if not any(i["pages"] for i in data["instances"]):
-            return
-        out.mkdir(parents=True, exist_ok=True)
-        (out / "wikis.json").write_text(json.dumps(data, indent=1, ensure_ascii=False))
-        for inst in data["instances"]:
-            if not inst["pages"]:
+    def _commit(self, message: bytes, author: bytes) -> bytes:
+        # sign/no_verify: never pick up the user's global commit signing or hooks for these internal commits
+        return porcelain.commit(self.repo, message=message, author=author, committer=COMMITTER, sign=False,
+                                no_verify=True)
+
+    def close(self) -> None:
+        """Release open pack files. Reading still works afterwards (dulwich reopens objects as needed)."""
+        with self._lock:
+            self.repo.close()
+
+    # ---- reading history from git ----
+    def _blob(self, sha: str, path: str) -> str:
+        commit = self.repo[sha.encode()]
+        _, blob = tree_lookup_path(self.repo.__getitem__, commit.tree, path.encode())
+        return self.repo[blob].data.decode("utf-8", errors="replace")
+
+    def revision_content(self, page: Page, version: int) -> str:
+        with self._lock:
+            return self._blob(page.revisions[version - 1].sha, page.path)
+
+    def diff(self, wiki_id: str, title: str, version: int) -> list[str]:
+        """Unified diff (difflib) of one revision against the previous one."""
+        with self._lock:
+            page = self.find(wiki_id, title)
+            if page is None or not 1 <= version <= len(page.revisions):
+                raise KeyError(f"{wiki_id}/{title} v{version}")
+            new = self._blob(page.revisions[version - 1].sha, page.path)
+            old = self._blob(page.revisions[version - 2].sha, page.path) if version > 1 else ""
+        return unified_diff(old, new, version)
+
+    def to_json(self, contents: bool = True) -> dict:
+        with self._lock:
+            out = []
+            for m in self.meta:
+                pages = []
+                for p in self.pages.get(m["id"], {}).values():
+                    revs, prev = [], ""
+                    for r in p.revisions:
+                        d = asdict(r)
+                        if contents:
+                            text = self._blob(r.sha, p.path)
+                            d["content"], d["html"] = text, to_html(text)
+                            d["diff"] = unified_diff(prev, text, r.version)
+                            prev = text
+                        revs.append(d)
+                    pages.append({"title": p.title, "path": p.path, "revisions": revs})
+                out.append({**m, "pages": pages})
+            return {"instances": out, "storage": "git", "repo": str(self.root)}
+
+    # ---- reopening a finished run ----
+    @classmethod
+    def open(cls, root: Path) -> "WikiStore":
+        repo = Repo(str(root))
+        head = repo.head()
+        meta = json.loads(repo[tree_lookup_path(repo.__getitem__, repo[head].tree, META_FILE.encode())[1]].data)
+        store = cls(meta["instances"], root, create=False)
+        store.t0 = meta.get("t0", 0)
+        for entry in repo.get_walker(reverse=True):
+            c = entry.commit
+            msg = c.message.decode("utf-8", errors="replace")
+            tr = dict(m.groups() for line in msg.splitlines() if (m := TRAILER.match(line)))
+            if "Wiki" not in tr:
                 continue
-            d = out / inst["id"].replace("/", "__")
-            d.mkdir(parents=True, exist_ok=True)
-            for i, page in enumerate(inst["pages"]):
-                (d / f"{_safe(page['title'], i)}.md").write_text(render_markdown(inst, page))
+            wiki_id, title = tr["Wiki"], tr["Page"]
+            page = store.find(wiki_id, title)
+            if page is None:
+                changes = [ch for ch in entry.changes() if ch.new and ch.new.path]
+                path = next((ch.new.path.decode() for ch in changes if ch.new.path.decode().startswith(wiki_id + "/")),
+                            f"{wiki_id}/{_slug(title)}.md")
+                page = Page(title=title, path=path)
+                store.pages.setdefault(wiki_id, {})[title] = page
+            content = store._blob(c.id.decode(), page.path)
+            author = c.author.decode("utf-8", errors="replace").split(" <")[0]
+            author = re.sub(r" \([^)]*\)$", "", author)
+            page.revisions.append(Revision(
+                version=len(page.revisions) + 1, author=author, role=tr.get("Role", ""),
+                level=int(tr["Level"]) if tr.get("Level", "").isdigit() else None, model=tr.get("Model") or None,
+                mode=tr.get("Mode", "replace"), t=float(tr.get("T") or 0), chars_delta=len(content) - len(page.content),
+                summary=msg.split("\n\nSwarmy-")[0].strip() if tr.get("Mode") else "", sha=c.id.decode()))
+            if page.revisions[-1].summary == f"{page.revisions[-1].mode.capitalize()} {title}":
+                page.revisions[-1].summary = ""
+            page.content = content
+        return store
 
 
-def _safe(title: str, i: int) -> str:
-    return "".join(ch if ch.isalnum() or ch in "-_ " else "_" for ch in title)[:80].strip() or f"page{i}"
+def _legacy_json(run_dir: Path) -> dict | None:
+    """Runs from before git storage saved wikis/wikis.json."""
+    f = run_dir / "wikis" / "wikis.json"
+    if not f.exists():
+        return None
+    data = json.loads(f.read_text())
+    for inst in data["instances"]:
+        for page in inst["pages"]:
+            prev = ""
+            for r in page["revisions"]:
+                r["html"] = to_html(r.get("content", ""))
+                r["diff"] = unified_diff(prev, r.get("content", ""), r["version"])
+                prev = r.get("content", "")
+    data["storage"] = "json"
+    return data
+
+
+def open_store(run_dir: Path) -> WikiStore | None:
+    root = run_dir / "wiki"
+    return WikiStore.open(root) if (root / ".git").exists() else None
+
+
+def load(run_dir: Path) -> dict | None:
+    """All wikis of a finished run (every revision with its content, HTML and diff), or None."""
+    store = open_store(run_dir)
+    if store is None:
+        return _legacy_json(run_dir)
+    try:
+        data = store.to_json()
+    finally:
+        store.close()
+    return data if any(i["pages"] for i in data["instances"]) else None
+
+
+def unified_diff(old: str, new: str, version: int) -> list[str]:
+    """difflib's unified diff of two revisions (2 lines of context), without the ---/+++ header."""
+    lines = difflib.unified_diff(old.splitlines(), new.splitlines(), f"v{version - 1}", f"v{version}", n=2,
+                                 lineterm="")
+    return [ln for ln in lines if not ln.startswith(("--- v", "+++ v"))]
 
 
 def render_markdown(inst: dict, page: dict) -> str:
-    """A page as Markdown with a header naming its editors and a revision log."""
+    """A page as Markdown with its contributors and revision history (for `swarmy wiki --page`)."""
     revs = page["revisions"]
     cur = revs[-1]
     people: dict[str, list] = {}
@@ -152,7 +313,7 @@ def render_markdown(inst: dict, page: dict) -> str:
         "",
         "---",
         "",
-        cur["content"],
+        cur.get("content", ""),
         "",
         "---",
         "",
@@ -167,11 +328,6 @@ def render_markdown(inst: dict, page: dict) -> str:
                      f"{'' if r['level'] is None else r['level']} | {r['model'] or ''} | "
                      f"{r['mode']} ({r['chars_delta']:+d} chars) | {summary} |")
     return "\n".join(lines) + "\n"
-
-
-def load(run_dir: Path) -> dict | None:
-    f = run_dir / "wikis" / "wikis.json"
-    return json.loads(f.read_text()) if f.exists() else None
 
 
 def activity(tracer, run_id: str) -> dict:

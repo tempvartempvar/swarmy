@@ -999,57 +999,20 @@ function author(r) {
     r.level != null ? h("span", { class: "muted small" }, ` L${r.level}`) : null,
     r.model ? h("span", { class: "muted small" }, ` · ${r.model}`) : null);
 }
-function esc(t) { return t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
-function inline(t) {
-  return esc(t).replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
-    .replace(/(^|[^*])\*([^*]+)\*/g, "$1<em>$2</em>");
+function mdView(html) {
+  // Markdown is rendered on the server with markdown-it-py (raw HTML escaped, unsafe links refused).
+  const d = h("div", { class: "md" }); d.innerHTML = html || ""; return d;
 }
-function md(text) {
-  // Small, safe Markdown renderer: everything is escaped first; only a few constructs are styled.
-  const out = [], lines = (text || "").split("\n");
-  let i = 0, list = null, para = [];
-  const flushPara = () => { if (para.length) { out.push(`<p>${inline(para.join(" "))}</p>`); para = []; } };
-  const flushList = () => { if (list) { out.push(`<${list.tag}>${list.items.map((x) => `<li>${inline(x)}</li>`).join("")}</${list.tag}>`); list = null; } };
-  while (i < lines.length) {
-    const ln = lines[i];
-    if (/^```/.test(ln)) {
-      flushPara(); flushList();
-      const buf = []; i++;
-      while (i < lines.length && !/^```/.test(lines[i])) buf.push(lines[i++]);
-      out.push(`<pre><code>${esc(buf.join("\n"))}</code></pre>`); i++; continue;
-    }
-    const hm = ln.match(/^(#{1,4})\s+(.*)/);
-    if (hm) { flushPara(); flushList(); out.push(`<h${hm[1].length}>${inline(hm[2])}</h${hm[1].length}>`); i++; continue; }
-    const lm = ln.match(/^\s*([-*]|\d+\.)\s+(.*)/);
-    if (lm) { flushPara(); const tag = /\d/.test(lm[1]) ? "ol" : "ul"; if (!list || list.tag !== tag) { flushList(); list = { tag, items: [] }; } list.items.push(lm[2]); i++; continue; }
-    if (/^\|.*\|\s*$/.test(ln)) {
-      flushPara(); flushList();
-      const rows = [];
-      while (i < lines.length && /^\|.*\|\s*$/.test(lines[i])) { if (!/^\|[\s:-|]+\|\s*$/.test(lines[i])) rows.push(lines[i]); i++; }
-      out.push(`<table>${rows.map((r) => `<tr>${r.trim().slice(1, -1).split("|").map((c) => `<td>${inline(c.trim())}</td>`).join("")}</tr>`).join("")}</table>`);
-      continue;
-    }
-    if (!ln.trim()) { flushPara(); flushList(); i++; continue; }
-    flushList(); para.push(ln); i++;
-  }
-  flushPara(); flushList();
-  const d = h("div", { class: "md" }); d.innerHTML = out.join("\n"); return d;
-}
-function diffLines(a, b) {
-  const A = (a || "").split("\n"), B = (b || "").split("\n");
-  if (A.length * B.length > 400000) return [...A.map((l) => ["del", l]), ...B.map((l) => ["add", l])];
-  const dp = Array.from({ length: A.length + 1 }, () => new Uint16Array(B.length + 1));
-  for (let x = A.length - 1; x >= 0; x--) for (let y = B.length - 1; y >= 0; y--)
-    dp[x][y] = A[x] === B[y] ? dp[x + 1][y + 1] + 1 : Math.max(dp[x + 1][y], dp[x][y + 1]);
-  const out = []; let x = 0, y = 0;
-  while (x < A.length && y < B.length) {
-    if (A[x] === B[y]) { out.push(["ctx", A[x]]); x++; y++; }
-    else if (dp[x + 1][y] >= dp[x][y + 1]) out.push(["del", A[x++]]);
-    else out.push(["add", B[y++]]);
-  }
-  while (x < A.length) out.push(["del", A[x++]]);
-  while (y < B.length) out.push(["add", B[y++]]);
-  return out;
+function diffView(lines) {
+  // A unified diff from difflib: "@@" hunk headers, then " " context, "-" removed and "+" added lines.
+  const box = h("div", { class: "diff" });
+  if (!lines || !lines.length) { box.append(h("div", { class: "skip" }, "No textual change.")); return box; }
+  lines.forEach((l, i) => {
+    if (l.startsWith("@@")) { if (i) box.append(h("div", { class: "skip" }, "…")); return; }
+    const k = l[0] === "+" ? "add" : l[0] === "-" ? "del" : "ctx";
+    box.append(h("div", { class: k }, (k === "add" ? "+ " : k === "del" ? "− " : "  ") + l.slice(1)));
+  });
+  return box;
 }
 
 /* ---------------- run explorer ---------------- */
@@ -1150,8 +1113,8 @@ function renderOrders() {
   ];
   if (goal) out.push(h("div", { class: "goal-box" }, h("strong", {}, `${o.to}'s standing goal: `), goal));
   if (o.fields && o.fields.objective) {
-    for (const [k, label] of ORDER_SECTIONS) if (o.fields[k]) out.push(h("h3", {}, label), md(o.fields[k]));
-  } else out.push(h("h3", {}, o.id === 0 ? "What you asked for" : "The order"), md(o.text));
+    for (const [k, label] of ORDER_SECTIONS) if (o.fields[k]) out.push(h("h3", {}, label), mdView(o.html[k]));
+  } else out.push(h("h3", {}, o.id === 0 ? "What you asked for" : "The order"), mdView(o.html.text));
   if (children.length) {
     out.push(h("h3", {}, `How ${o.to} split it up (${children.length} order${children.length > 1 ? "s" : ""})`));
     out.push(h("div", { class: "split" }, children.map((c) => h("div", { class: "split-item", onclick: () => { S.ex.sel = c.id; renderOrders(); } },
@@ -1163,7 +1126,7 @@ function renderOrders() {
   if (o.report) {
     out.push(h("h3", {}, o.id === 0 ? `Final report to you (${o.report.status})` : `Report back to ${o.from} (${o.report.status}, at ${o.report.t.toFixed(1)}s)`));
     if (o.report.answer) out.push(h("p", {}, h("strong", {}, "Answer: "), o.report.answer));
-    out.push(md(o.report.text));
+    out.push(mdView(o.report.html));
   }
   main.replaceChildren(...out);
 }
@@ -1178,7 +1141,7 @@ function renderFiles() {
   if (!f) { main.replaceChildren(h("p", { class: "muted" }, "Select a file.")); return; }
   main.replaceChildren(h("h2", { style: "margin:0 0 6px" }, f.path),
     h("div", { class: "wb-meta" }, `${f.bytes.toLocaleString()} bytes${f.truncated ? " (showing the first 300 KB)" : ""}`),
-    f.binary ? h("p", { class: "muted" }, "Binary file.") : /\.md$/i.test(f.path) ? md(f.text) : h("pre", { class: "code" }, f.text));
+    f.binary ? h("p", { class: "muted" }, "Binary file.") : f.html ? mdView(f.html) : h("pre", { class: "code" }, f.text));
 }
 
 function renderWikiBrowser() {
@@ -1232,7 +1195,8 @@ function renderWikiBrowser() {
   const out = [
     h("h2", { style: "margin:0" }, page.title),
     h("div", { class: "wb-meta" },
-      h("div", {}, h("code", {}, inst.id), ` · ${inst.label} · ${revs.length} revision${revs.length > 1 ? "s" : ""}`),
+      h("div", {}, h("code", {}, inst.id), ` · ${inst.label} · ${revs.length} revision${revs.length > 1 ? "s" : ""}`,
+        data.storage === "git" ? h("span", { class: "muted small", title: `Every edit is a git commit. Browse with: git -C ${data.repo} log -p -- ${page.path}` }, ` · git: ${page.path} @ ${cur.sha.slice(0, 7)}`) : null),
       h("div", {}, `Last edited at ${cur.t.toFixed(1)}s by `, author(cur), cur.summary ? h("span", {}, ` · “${cur.summary}”`) : null),
       h("div", {}, "Contributors: ", Object.values(people).map(({ r, n }, i) => [i ? ", " : "", h("strong", {}, r.author), " ", rankBadge(r.role), h("span", { class: "muted small" }, ` ×${n}`)]))),
     h("div", { class: "wb-tabs" },
@@ -1241,7 +1205,7 @@ function renderWikiBrowser() {
   ];
   if (wb.view === "page") {
     if (shown !== cur) out.push(h("p", { class: "small" }, `Showing v${shown.version} by `, author(shown), " · ", h("span", { class: "linklike", onclick: () => { wb.rev = null; renderWikiBrowser(); } }, "back to latest")));
-    out.push(md(shown.content));
+    out.push(mdView(shown.html));
   } else {
     const table = h("table", { class: "hist" }, h("tr", {}, ["v", "when", "who", "edit summary", "change", ""].map((c) => h("th", {}, c))));
     [...revs].reverse().forEach((r) => {
@@ -1257,21 +1221,7 @@ function renderWikiBrowser() {
     const prev = revs.find((r) => r.version === sel.version - 1);
     out.push(h("h3", {}, prev ? `What v${sel.version} changed (vs v${prev.version})` : `v${sel.version} created the page`));
     out.push(h("p", { class: "small" }, "By ", author(sel), ` at ${sel.t.toFixed(1)}s`, sel.summary ? ` · “${sel.summary}”` : ""));
-    const diff = h("div", { class: "diff" });
-    const lines = diffLines(prev ? prev.content : "", sel.content);
-    const line = ([k, l]) => h("div", { class: k }, (k === "add" ? "+ " : k === "del" ? "− " : "  ") + l);
-    for (let i = 0; i < lines.length;) {  // collapse long unchanged stretches, keeping 2 lines of context
-      if (lines[i][0] !== "ctx") { diff.append(line(lines[i++])); continue; }
-      let j = i; while (j < lines.length && lines[j][0] === "ctx") j++;
-      const run = lines.slice(i, j), headKeep = i === 0 ? 0 : 2, tailKeep = j === lines.length ? 0 : 2;
-      if (run.length > headKeep + tailKeep + 2) {
-        run.slice(0, headKeep).forEach((l) => diff.append(line(l)));
-        diff.append(h("div", { class: "skip" }, `… ${run.length - headKeep - tailKeep} unchanged lines`));
-        run.slice(run.length - tailKeep).forEach((l) => diff.append(line(l)));
-      } else run.forEach((l) => diff.append(line(l)));
-      i = j;
-    }
-    out.push(diff);
+    out.push(diffView(sel.diff));
   }
   main.replaceChildren(...out);
 }

@@ -36,6 +36,7 @@ class RunContext:
     transcript: Transcript
     tools: Toolbox = None  # type: ignore[assignment]
     listener: Callable[[dict], None] | None = None  # live UI hook
+    wiki_dir: Path | None = None  # git repository for the wikis (run_one: runs/<run_id>/wiki)
     agents: dict[str, Agent] = field(default_factory=dict)
     wikis: list[WikiInstance] = field(default_factory=list)
     wiki: WikiStore = None  # type: ignore[assignment]
@@ -56,7 +57,7 @@ class RunContext:
     def bind(self, root: Agent) -> None:
         self.agents = {a.name: a for a in root.walk()}
         self.wikis = wiki_instances(self.org)
-        self.wiki = WikiStore(self.wikis)
+        self.wiki = WikiStore(self.wikis, self.wiki_dir or self.workspace.with_name(self.workspace.name + "-wiki"))
         for a in root.walk():
             self._contacts[a.name] = {b.name: k for b, k in contacts(self.org, a.node)}
         for inst in self.wikis:
@@ -127,7 +128,8 @@ async def run_one(
     root = build_tree(org, catalog, mock=registry.mock)
     transcript = Transcript(run_dir / "transcript.jsonl")
     ctx = RunContext(run_id=run_id, org=org, task=task, workspace=workspace, registry=registry,
-                     budget=RunBudget(run_cap), tracer=tracer, transcript=transcript, listener=listener)
+                     budget=RunBudget(run_cap), tracer=tracer, transcript=transcript, listener=listener,
+                     wiki_dir=run_dir / "wiki")
     ctx.tools = Toolbox(ctx)
     ctx.bind(root)
     if on_start:
@@ -162,7 +164,7 @@ async def run_one(
     undelivered = {k: len(v) for k, v in ctx.inboxes.items() if v}
     if undelivered:
         ctx.event(root, "undelivered", {"by_node": undelivered, "count": sum(undelivered.values())})
-    ctx.wiki.save(run_dir / "wikis")
+    ctx.wiki.close()  # every edit is already a commit in run_dir/wiki
     transcript.write(node="-", kind="result", status=status, answer=answer, score=grade.score, error=error)
     transcript.close()
 

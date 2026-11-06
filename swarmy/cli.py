@@ -262,7 +262,7 @@ def cmd_wiki(args) -> int:
         for f in act["failed"][:10]:
             print(f"  {f['node']}: {f['tool']} failed: {f['error']}")
         return 1
-    print(f"run {run_dir.name}\n")
+    print(f"run {run_dir.name}" + (f"  (git repository: {data['repo']})" if data.get("storage") == "git" else "") + "\n")
     for inst in data["instances"]:
         if args.wiki and inst["id"] != args.wiki:
             continue
@@ -282,6 +282,8 @@ def cmd_wiki(args) -> int:
         print()
     if not args.page:
         print("Show a page with: swarmy wiki RUN --page TITLE [--wiki ID]")
+        if data.get("storage") == "git":
+            print(f"Every edit is a git commit: git -C {data['repo']} log --format='%h %an: %s' -p")
     return 0
 
 

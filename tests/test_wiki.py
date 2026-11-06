@@ -2,6 +2,9 @@
 
 import asyncio
 import json
+from pathlib import Path
+
+from dulwich.repo import Repo
 
 from swarmy.catalog import Catalog
 from swarmy.cli import main
@@ -21,15 +24,15 @@ def _org():
         "knowledge": {"wikis": [{"name": "orders", "scope": "org"}]}})
 
 
-def test_revisions_record_author_rank_and_mode():
-    store = WikiStore(wiki_instances(_org()))
+def test_revisions_record_author_rank_and_mode(tmp_path):
+    store = WikiStore(wiki_instances(_org()), tmp_path / "wiki")
     store.write("orders", "Plan", "step 1", author="colonel", role="colonel", level=0, model="haiku")
     store.write("orders", "plan", "step 2", author="private-1", role="private", level=1, model="haiku",
                 append=True)
     store.write("orders", "Plan", "rewritten", author="private-2", role="private", level=1, model="haiku")
     page = store.find("orders", "PLAN")
     assert [r.mode for r in page.revisions] == ["create", "append", "replace"]
-    assert page.revisions[1].content == "step 1\n\nstep 2"
+    assert store.revision_content(page, 2) == "step 1\n\nstep 2" and page.content == "rewritten"
     assert page.current.author == "private-2" and page.current.role == "private"
     assert page.contributors() == [("colonel", "colonel", 1), ("private-1", "private", 1),
                                    ("private-2", "private", 1)]
@@ -37,6 +40,38 @@ def test_revisions_record_author_rank_and_mode():
     data = store.to_json()
     md = render_markdown(data["instances"][0], data["instances"][0]["pages"][0])
     assert "| 2 |" in md and "private-1 | private | 1 | haiku | append" in md
+    assert store.diff("orders", "Plan", 3) == ["@@ -1,3 +1 @@", "-step 1", "-", "-step 2", "+rewritten"]
+
+
+def test_every_edit_is_a_git_commit_and_reopens(tmp_path):
+    store = WikiStore(wiki_instances(_org()), tmp_path / "wiki")
+    store.write("orders", "Plan", "# Plan\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n<script>x()</script>",
+                author="colonel", role="colonel", level=0, model="haiku", summary="First plan")
+    store.write("orders", "Plan", "more", author="private-1", role="private", level=1, model="haiku", append=True)
+    store.close()
+    repo = Repo(str(tmp_path / "wiki"))
+    log = [e.commit for e in repo.get_walker()]
+    assert [c.author.decode() for c in log[:2]] == ["private-1 (private) <private-1@swarmy.local>",
+                                                     "colonel (colonel) <colonel@swarmy.local>"]
+    assert log[1].message.decode().startswith("First plan\n\nSwarmy-Wiki: orders\nSwarmy-Page: Plan\n")
+    assert len(log) == 3 and not log[0].gpgsig  # plus the initial commit; never signed with the user's key
+    data = load(tmp_path)  # rebuilt from git alone
+    page = data["instances"][0]["pages"][0]
+    assert data["storage"] == "git" and page["path"] == "orders/plan.md"
+    r1, r2 = page["revisions"]
+    assert (r1["author"], r1["role"], r1["level"], r1["summary"]) == ("colonel", "colonel", 0, "First plan")
+    assert (r2["author"], r2["mode"], r2["summary"]) == ("private-1", "append", "")
+    assert "<table>" in r1["html"] and "<script>" not in r1["html"] and "&lt;script&gt;" in r1["html"]
+    assert r2["diff"][-2:] == ["+", "+more"]
+
+
+def test_relative_repo_path(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)  # the UI and CLI pass a relative results directory
+    store = WikiStore(wiki_instances(_org()), Path("results/runs/r1/wiki"))
+    store.write("orders", "Plan", "step 1", author="colonel", role="colonel", level=0, model="haiku")
+    store.close()
+    data = load(Path("results/runs/r1"))
+    assert data["instances"][0]["pages"][0]["revisions"][0]["content"] == "step 1"
 
 
 def _mock_run(org, tmp_path):
@@ -60,7 +95,7 @@ def test_run_saves_wiki_history_and_agents_see_ranks(tmp_path):
     assert titles["Client brief"]["revisions"][0]["author"] == "client"
     plan = titles["Plan"]["revisions"]
     assert {r["role"] for r in plan} <= {"field-marshal", "colonel"} and all(r["level"] in (0, 1) for r in plan)
-    assert (run_dir / "wikis" / "orders" / "Plan.md").read_text().count("| ") > 5
+    assert (run_dir / "wiki" / "orders" / "plan.md").read_text() == titles["Plan"]["revisions"][-1]["content"]
     # what an agent reads includes the byline and contributors with their ranks
     transcript = (run_dir / "transcript.jsonl").read_text().splitlines()
     reads = [json.loads(l) for l in transcript if '"tool": "wiki_read"' in l]
@@ -79,3 +114,13 @@ def test_cli_wiki(tmp_path, capsys):
     assert main(["--results", str(tmp_path), "wiki", "--wiki", "orders", "--page", "Plan"]) == 0
     out = capsys.readouterr().out
     assert "## Revision history" in out and "| rank |" in out
+
+
+def test_runs_saved_before_git_storage_still_load(tmp_path):
+    (tmp_path / "wikis").mkdir()
+    rev = {"version": 1, "author": "colonel", "role": "colonel", "level": 0, "model": "haiku", "mode": "create",
+           "content": "**old**", "t": 1.0, "chars_delta": 7, "summary": ""}
+    (tmp_path / "wikis" / "wikis.json").write_text(json.dumps({"instances": [
+        {"id": "orders", "label": "whole organization", "members": [], "pages": [{"title": "Plan", "revisions": [rev]}]}]}))
+    r = load(tmp_path)["instances"][0]["pages"][0]["revisions"][0]
+    assert r["html"] == "<p><strong>old</strong></p>\n" and r["diff"][-1] == "+**old**"

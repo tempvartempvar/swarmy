@@ -150,7 +150,7 @@ def test_messaging_and_wikis_in_a_run(tmp_path):
     answers = t.query("SELECT COUNT(*) n FROM calls WHERE purpose='answer'")[0]["n"]
     assert answers > 0
     run_dir = tmp_path / "runs" / s["run_id"]
-    assert (run_dir / "wikis" / "handbook" / "Client brief.md").exists()
+    assert (run_dir / "wiki" / "handbook" / "client-brief.md").exists()
     states = {e["state"] for e in live if e["type"] == "state"}
     assert {"working", "thinking", "waiting", "done", "answering"} <= states
     assert live[-1]["type"] == "finished"

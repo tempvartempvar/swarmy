@@ -277,13 +277,26 @@ reach. Wikis are meant to be a curated knowledge base, not a log:
 Every page an agent reads shows who last edited it, the last edit summary, and all contributors with
 their ranks.
 
-Every edit is kept as a revision recording the editor's name, rank, level and model, the edit
-summary, the kind of edit (create, replace or append) and when in the run it happened. To read them:
+Each run's wikis are a **git repository** (`runs/<run_id>/wiki/`): one folder per wiki, one
+Markdown file per page, and **one commit per edit**. The commit author is the agent and its rank
+(`captain-1.2 (captain)`), the message is the edit summary, and trailers record the wiki, page,
+rank, level, model, kind of edit (create, replace or append) and when in the run it happened.
+History, diffs and blame therefore come from git itself. To read them:
 
 - the **run explorer** in `swarmy ui` (live or past runs, with history and diffs);
 - `swarmy wiki [RUN] [--wiki ID] [--page TITLE]` on the command line;
-- the run directory: `runs/<run_id>/wikis/wikis.json` (everything) plus one Markdown file per page,
-  with a contributor list and a revision table.
+- any git tool, for example:
+
+```bash
+git -C results/runs/<run_id>/wiki log --format='%h %an: %s' -p
+```
+
+The custom code is only the permission layer (who can read or write which wiki, in
+`swarmy/rules.py`). Storage uses [dulwich](https://www.dulwich.io/) (pure-Python git, so no git
+binary is needed and your own git config, signing and hooks are never used), diffs use `difflib`,
+and Markdown is rendered on the server with [markdown-it-py](https://github.com/executablebooks/markdown-it-py)
+(raw HTML is escaped). Runs from earlier versions, saved as `wikis/wikis.json`, still open in the
+explorer.
 
 ### Orders
 
@@ -571,7 +584,7 @@ results/
   swarmy.db                       # sweeps, runs, calls, events (SQLite)
   runs/<run_id>/transcript.jsonl    # every input, step (text, thinking summary, tool calls) and tool result
   runs/<run_id>/workspace/          # final shared workspace
-  runs/<run_id>/wikis/              # wikis.json (every revision) + one Markdown file per page
+  runs/<run_id>/wiki/               # git repository: a folder per wiki, a file per page, a commit per edit
   runs/<run_id>/result.json         # grade and per-node cost and calls
   reports/<sweep>-<id>/             # report.md, charts, runs.csv, levels.csv, summary.json
 ```

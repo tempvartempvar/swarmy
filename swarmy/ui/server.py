@@ -23,6 +23,7 @@ from pydantic import ValidationError
 
 from ..catalog import Catalog
 from ..config import GenerateSpec, OrgConfig, load_org
+from ..markdown import to_html
 from ..paths import CONFIG_DIR, DEFAULT_RESULTS_DIR
 from ..ranks import GLOSS, OFFICER_LADDER, SOLO_RANK, WORKER_RANK, management_ranks
 from ..rules import KIND_LABELS, all_contacts, wiki_instances
@@ -306,7 +307,7 @@ class UIState:
                             "status": meta.get("status"), "score": meta.get("score"),
                             "family": (meta.get("task_id") or "").split("/")[0], "mtime": f.stat().st_mtime,
                             "mock": meta.get("mock"),
-                            "has_wikis": (f.parent / "wikis" / "wikis.json").exists()})
+                            "has_wikis": (f.parent / "wiki" / ".git").exists() or (f.parent / "wikis" / "wikis.json").exists()})
         out.sort(key=lambda r: -r["mtime"])
         return out[:100]
 
@@ -322,6 +323,10 @@ class UIState:
             data = load_orders(tracer, run_id, org_json)
             if key:
                 data["mock"] = self.runs[key]["mock"]
+            for o in data["orders"]:  # Markdown rendered here (markdown-it-py), so the page just inserts HTML
+                o["html"] = {"text": to_html(o["text"]), **{k: to_html(v) for k, v in (o.get("fields") or {}).items() if v}}
+                if o["report"]:
+                    o["report"]["html"] = to_html(o["report"]["text"])
             return data
         finally:
             tracer.close()
@@ -332,12 +337,14 @@ class UIState:
 
         run_dir = self._run_dir(run_id)
         key = self.live_ids.get(run_id)
-        store = self.stores.get(key, {}).get("wiki") if key else None
+        with self.lock:
+            running = bool(key) and self.runs[key]["status"] == "running"
+        store = self.stores.get(key, {}).get("wiki") if running else None
         data = store.to_json() if store is not None else (load(run_dir) or {"instances": []})
         tracer = Tracer(self.results_dir / "swarmy.db")
         try:
             data["activity"] = activity(tracer, run_id)
-            if not data["instances"]:  # finished runs with no pages don't save wikis.json
+            if not any(i["pages"] for i in data["instances"]):
                 row = tracer.query("SELECT org_json FROM runs WHERE run_id=?", (run_id,))
                 if row:
                     from ..config import OrgConfig
@@ -368,7 +375,8 @@ class UIState:
         except UnicodeDecodeError:
             text, binary = "", True
         return {"path": rel, "bytes": p.stat().st_size, "text": text, "binary": binary,
-                "truncated": p.stat().st_size > len(raw)}
+                "truncated": p.stat().st_size > len(raw),
+                "html": to_html(text) if text and p.suffix.lower() in (".md", ".markdown") else None}
 
     def run_state(self, key: str, since: int) -> dict:
         with self.lock:

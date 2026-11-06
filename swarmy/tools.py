@@ -429,10 +429,11 @@ class Toolbox:
         rev = store.write(inst.id, args["page"], args["content"], author=agent.name, role=agent.spec.role,
                           level=agent.level, model=agent.model.alias, append=bool(args.get("append")),
                           summary=str(args.get("summary") or ""))
-        title = store.find(inst.id, args["page"]).title
+        page = store.find(inst.id, args["page"])
+        title = page.title
         self.ctx.event(agent, "wiki_write", {"wiki": inst.id, "page": title, "version": rev.version, "mode": rev.mode,
-                                             "role": agent.spec.role, "chars": len(rev.content),
-                                             "delta": rev.chars_delta, "summary": rev.summary,
+                                             "role": agent.spec.role, "chars": len(page.content),
+                                             "delta": rev.chars_delta, "summary": rev.summary, "commit": rev.sha[:10],
                                              "preview": args["content"][:200]})
         return f"Saved {inst.id} / {title} (v{rev.version})."
 

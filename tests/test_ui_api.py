@@ -140,6 +140,8 @@ def test_mission_run_and_explorer(server):
     assert status == 200 and {i["id"] for i in wikis["instances"]} >= {"orders", "unit-log/engineer-colonel"}
     page = next(p for i in wikis["instances"] if i["id"] == "orders" for p in i["pages"] if p["title"] == "Plan")
     assert page["revisions"][0]["role"] == "field-marshal"
+    assert wikis["storage"] == "git" and page["revisions"][0]["html"].startswith("<") and page["revisions"][0]["diff"]
+    assert by_id[0]["html"]["text"] and by_id[0]["report"]["html"]
     status, files = call(f"/api/explorer/{rid}/files")
     assert status == 200 and "files" in files
     status, _ = call("/api/explorer/../../etc/orders")
