@@ -63,7 +63,7 @@ def test_free_format_and_forwarding_toggle(tmp_path):
     ctx, root = _ctx(tmp_path, orders={"format": "free", "no_forwarding": False})
     spec = next(s for s in tool_specs(root, ctx) if s.name == "delegate")
     assert spec.parameters["properties"]["assignments"]["items"]["required"] == ["to", "task"]
-    order, fields = ctx.tools._order_from(root, {"to": "private-1", "task": ctx.task.brief[:1500]})
+    order, fields = ctx.tools._order_from(root, {"to": "private-1", "task": ctx.task.brief[:1500]}, ctx.agents["private-1"])
     assert order.startswith("GreenLoop") and fields == {}
 
 

@@ -242,7 +242,7 @@ class Toolbox:
             return ToolResult(call.id, f"Error: {call.name} failed with {type(e).__name__}: {str(e)[:300]}", True)
 
     # ---- delegation ----
-    def _order_from(self, agent: "Agent", a: dict) -> tuple[str, dict]:
+    def _order_from(self, agent: "Agent", a: dict, child: "Agent") -> tuple[str, dict]:
         """Validate one assignment and return (rendered order text, structured fields)."""
         rules = self.ctx.org.orders
         if rules.format == "structured":
@@ -261,9 +261,21 @@ class Toolbox:
             text, fields = str(a.get("task") or "").strip(), {}
             if not text:
                 raise ToolError("empty task")
-        if len(text) > rules.max_chars * LIMIT_GRACE:
-            raise ToolError(f"order is {len(text)} characters; the limit is {rules.max_chars}. Give only what this "
-                            "subordinate needs; put shared facts on a wiki page and point to it.")
+        limit = rules.max_chars if child.children else rules.max_chars_worker
+        if len(text) > limit * LIMIT_GRACE:
+            if child.children:
+                raise ToolError(f"order is {len(text)} characters; orders to commanders must stay under {limit}. State "
+                                "the outcome, why it matters, the constraints and how you'll judge it; leave the how "
+                                "to them, and put shared facts on a wiki page and point to it.")
+            raise ToolError(f"order is {len(text)} characters; orders to hands-on workers must stay under {limit}. "
+                            "Give one well-scoped task, and send the next one when this is done; put shared facts on "
+                            "a wiki page or in a file and point to it.")
+        if rules.no_micromanaging and child.children:
+            below = [d.name for d in child.walk() if d is not child]
+            named = [n for n in below if re.search(rf"(?<![\w.-]){re.escape(n)}(?![\w-])", text)]
+            if named:
+                raise ToolError(f"this order assigns work below {child.name} (it names {', '.join(named)}). Give "
+                                f"{child.name} the outcome and let it decide who does what.")
         if rules.no_forwarding:
             copied = forwarded_chars(text, agent.current_order_text)
             if copied > FORWARD_LIMIT or (copied > 120 and copied > 0.5 * len(text)):
@@ -294,7 +306,7 @@ class Toolbox:
                 problems.append(f"{to} is still working on order #{busy}; wait for its report before giving it another")
                 continue
             try:
-                jobs[to], job_fields[to] = self._order_from(agent, a)
+                jobs[to], job_fields[to] = self._order_from(agent, a, by_name[to])
             except ToolError as e:
                 problems.append(f"order to {to} rejected: {e}")
         if not jobs:
@@ -412,7 +424,12 @@ class Toolbox:
     async def _t_send_message(self, agent: "Agent", args: dict) -> str:
         ctx = self.ctx
         target, kind = self._check_contact(agent, args["to"])
-        text = args["text"][:4000]
+        text = args["text"]
+        limit = ctx.org.communication.max_message_chars
+        if len(text) > limit * LIMIT_GRACE:
+            ctx.messages_sent[agent.name] -= 1  # a rejected message doesn't use up the allowance
+            raise ToolError(f"message is {len(text)} characters; keep it under {limit}. Send the gist and point to a "
+                            "file or wiki page for details.")
         self._post(target.name, f"[Message from {agent.name} ({agent.spec.role})]: {text}")
         cc = self._cc(agent, target, text)
         ctx.event(agent, "message", {"to": target.name, "kind": kind, "chars": len(text), "cc": cc,
@@ -423,7 +440,12 @@ class Toolbox:
     async def _t_ask(self, agent: "Agent", args: dict) -> str:
         ctx = self.ctx
         target, kind = self._check_contact(agent, args["to"])
-        question = args["question"][:4000]
+        question = args["question"]
+        limit = ctx.org.communication.max_question_chars
+        if len(question) > limit * LIMIT_GRACE:
+            ctx.messages_sent[agent.name] -= 1
+            raise ToolError(f"question is {len(question)} characters; keep it under {limit}. Ask one specific "
+                            "question; point to a file or wiki page for background.")
         inverse, _ = relation(target.node, agent.node)
         provider = ctx.registry.provider_for(target.model)
         if target.conv is not None:
@@ -431,9 +453,10 @@ class Toolbox:
         else:
             specs = tool_specs(target, ctx)
             conv = provider.new_conversation(system_prompt(target, ctx), specs)
-        conv.add_user(question_message(agent, inverse, question))
+        answer_tokens = ctx.org.communication.max_answer_tokens
+        conv.add_user(question_message(agent, inverse, question, words=int(answer_tokens * 0.6)))
         max_tokens = ctx.budget.plan_call(target.model, conv.approx_input_tokens(),
-                                          min(target.spec.output_cap(), ANSWER_TOKENS))
+                                          min(target.spec.output_cap(), answer_tokens))
         ctx.live(target, "answering", {"from": agent.name})
         gate = ctx.registry.gate_for(target.model)
         queued = await gate.acquire()

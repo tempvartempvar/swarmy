@@ -14,7 +14,7 @@ from .config import Node, NodeSettings, OrgConfig
 from .prompts import NUDGE, system_prompt
 from .errors import stops_run
 from .providers import ProviderError, ToolCall, ToolResult
-from .tools import STATUS_FALLBACK, STATUS_WORDS, tool_specs, validate_args
+from .tools import LIMIT_GRACE, STATUS_FALLBACK, STATUS_WORDS, tool_specs, validate_args
 
 if TYPE_CHECKING:
     from .runner import RunContext
@@ -38,6 +38,7 @@ class Agent:
         self.wiki_writes = 0  # wiki edits during the current assignment
         self.reminded = False
         self.status_warned = False  # told once per order to give a short status
+        self.report_warned = False  # told once per order to shorten an over-long report
         self.outstanding: dict[int, dict] = {}  # order id -> {"to", "task"} for orders still being worked on
         self.arrived: list[dict] = []  # reports back from subordinates, not yet shown to this agent
         self.report_signal = asyncio.Event()  # set whenever a report arrives
@@ -110,6 +111,7 @@ class Agent:
         """Work on one assignment until `submit` (or a limit). Returns {report, answer, status}."""
         if order_id is None or order_id != self.current_order:  # a new order (a check-in continues the same one)
             self.wiki_writes, self.reminded, self.status_warned, self.files_written = 0, False, False, 0
+            self.report_warned = False
             self.current_order_text = text
         self.current_order = order_id
         self.turns = 0
@@ -171,6 +173,7 @@ class Agent:
             turn += 1
             self.turns = turn + 1
             self._deliver_inbox(ctx)
+            self._trim_context(ctx)
             left = budget - turn
             self.final_turn = left == 1
             if left == 3 and limit > 4:
@@ -282,13 +285,43 @@ class Agent:
         return {"report": f"[turn limit reached] {last_text}", "answer": None, "status": "turn_limit"}
 
 
+    def _trim_context(self, ctx: "RunContext") -> None:
+        """Over the context budget: clip older material, keeping fewer recent turns intact if needed, down
+        to about 60% of the budget so the next trim (and the next cache miss) is several turns away."""
+        rules = ctx.org.context
+        before = self.conv.approx_input_tokens()
+        if before <= rules.max_tokens:
+            return
+        keep, saved = rules.keep_turns, 0
+        while True:
+            saved += self.conv.trim(keep, rules.trim_to)
+            if self.conv.approx_input_tokens() <= 0.6 * rules.max_tokens or keep == 1:
+                break
+            keep -= 1
+        if saved:
+            ctx.event(self, "trimmed", {"before": before, "after": self.conv.approx_input_tokens(), "kept_turns": keep})
+
+    def _report_problem(self, args: dict, ctx: "RunContext") -> str | None:
+        """Reports have a length limit too: rejected once per order with advice, then cut to the limit."""
+        limit = ctx.org.orders.max_report_chars
+        report = str(args.get("report") or "")
+        if len(report) <= limit * LIMIT_GRACE:
+            return None
+        if not self.report_warned and not self.final_turn:
+            self.report_warned = True
+            return (f"Submission rejected: your report is {len(report)} characters; keep it under {limit}. Report "
+                    "results, decisions and open issues; put details in a file or wiki page and point to it.")
+        args["report"] = report[:limit] + f"\n[... {len(report) - limit} characters cut: over the report limit]"
+        return None
+
     def _submit_problem(self, args: dict, ctx: "RunContext") -> str | None:
         """Why a submit can't be accepted yet (None if it can): bad arguments, the status rule, or the
         one-time reminder to record findings on a wiki first."""
         if self.outstanding and not self.final_turn:
             return (f"Submission rejected: some of your orders are still out ({self.outstanding_list()}). "
                     "Call `wait` to collect their reports first.")
-        problem = validate_args(self.specs["submit"], {**args, "status": "x"}) or self._status_problem(args)
+        problem = (validate_args(self.specs["submit"], {**args, "status": "x"}) or self._status_problem(args)
+                   or self._report_problem(args, ctx))
         if problem:
             return f"Submission rejected: {problem}"
         if self._should_remind(ctx):

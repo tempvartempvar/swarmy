@@ -23,6 +23,8 @@ from .base import (
     Retryable,
     StepResult,
     ToolCall,
+    clip_args,
+    clip_text,
     ToolResult,
     ToolSpec,
     Usage,
@@ -73,6 +75,39 @@ class OpenAIConversation(Conversation):
     def add_assistant(self, message: dict) -> None:
         self.chars += len(json.dumps(message))
         self.messages.append(message)
+
+    def trim(self, keep_turns: int, keep_chars: int) -> int:
+        turns = [i for i, m in enumerate(self.messages) if m["role"] == "assistant"]
+        if len(turns) <= keep_turns:
+            return 0
+        boundary = turns[-keep_turns]
+        first_user = next((i for i, m in enumerate(self.messages) if m["role"] == "user"), -1)
+        before = self.chars
+        for i in range(1, boundary):
+            m = self.messages[i]
+            if i == first_user:
+                continue
+            if m["role"] in ("tool", "user") and isinstance(m.get("content"), str):
+                m["content"] = clip_text(m["content"], keep_chars)
+            elif m["role"] == "assistant":
+                if isinstance(m.get("content"), str):
+                    m["content"] = clip_text(m["content"], keep_chars)
+                calls = []
+                for tc in m.get("tool_calls") or []:
+                    fn = dict(tc.get("function") or {})
+                    try:
+                        args = json.loads(fn.get("arguments") or "{}")
+                        clipped = clip_args(args, keep_chars) if isinstance(args, dict) else args
+                        if clipped != args:
+                            fn["arguments"] = json.dumps(clipped)
+                    except ValueError:
+                        fn["arguments"] = clip_text(fn.get("arguments") or "", keep_chars)
+                    calls.append({**tc, "function": fn})
+                if calls:
+                    m["tool_calls"] = calls
+        self.chars = (len(self.system) + sum(len(t.description) + len(str(t.parameters)) for t in self.tool_specs)
+                      + sum(len(json.dumps(m)) for m in self.messages[1:]))
+        return max(0, before - self.chars)
 
 
 class OpenAICompatProvider(Provider):

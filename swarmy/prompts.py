@@ -104,6 +104,15 @@ def system_prompt(agent: "Agent", ctx: "RunContext") -> str:
                          "or call `wait` to wait for them. While orders are out you can check files, update the wiki, "
                          "answer questions, or give orders to subordinates who are free. You can't submit until "
                          "every report is back.")
+        lines.append("- Give each subordinate an outcome, not a procedure: what must be achieved, why it matters, the "
+                     "constraints, and how you will judge it. Leave the how to them; don't spell out details they "
+                     "are better placed to decide.")
+        if org.orders.no_micromanaging and any(c.children for c in agent.children):
+            lines.append("- Orders to commanders must not name or plan work for the people under them: each commander "
+                         "decides how to split its own work. Orders that do are rejected.")
+        lines.append(f"- Orders have length limits: {org.orders.max_chars} characters to commanders and "
+                     f"{org.orders.max_chars_worker} to hands-on workers. A worker's order is one well-scoped task; "
+                     "send the next task when it reports, rather than one long order.")
         lines.append("- Check what comes back. If something is missing, inconsistent or wrong, delegate follow-up work.")
         if lvl.review_tools and task.has_workspace:
             lines.append("- You can inspect the shared workspace (list_files, read_file"
@@ -115,9 +124,10 @@ def system_prompt(agent: "Agent", ctx: "RunContext") -> str:
                      + (" in `answer`" if task.answer_required else "") + ", a short report, and a `status` of at "
                      "most five words for the org chart.")
     else:
-        lines.append(f"- When finished, call `submit` with a concise report for {agent.parent.name}: what you did, the "
-                     "results or facts they need, and anything unresolved; plus a `status` of at most five words "
-                     "for the org chart (e.g. 'Pump specs verified and recorded').")
+        lines.append(f"- When finished, call `submit` with a concise report for {agent.parent.name} (at most "
+                     f"{org.orders.max_report_chars} characters): what you did, the results or facts they need, and "
+                     "anything unresolved, pointing to files or wiki pages for details; plus a `status` of at most "
+                     "five words for the org chart (e.g. 'Pump specs verified and recorded').")
 
     lines += ["", "## Environment"]
     if task.has_workspace:
@@ -215,11 +225,12 @@ def assignment_message(parent: "Agent", text: str) -> str:
     return f"Orders from {parent.name} ({parent.spec.role}):\n\n{text}"
 
 
-def question_message(asker: "Agent", kind: str, question: str) -> str:
+def question_message(asker: "Agent", kind: str, question: str, words: int = 350) -> str:
     """kind = how the asker relates to the recipient (e.g. 'report': the asker is the recipient's report)."""
     return (f"[Side conversation] Question from {asker.name} ({asker.spec.role}; {KIND_LABELS[kind]}):\n\n{question}"
-            "\n\nReply with a direct, concise answer in plain text. Do not call tools in this reply; your own work "
-            "continues separately.")
+            f"\n\nReply with a direct, concise answer in plain text, at most about {words} words; point to files or "
+            "wiki pages rather than repeating them. Do not call tools in this reply; your own work continues "
+            "separately.")
 
 
 NUDGE = ("Reminder: plain-text replies are not delivered. Continue with your tools, or call `submit` "

@@ -83,6 +83,9 @@ def describe_event(node: str, kind: str, d: dict) -> tuple[int, str]:
         return W, f"{node} used all {d.get('turns', '?')} of its turns without calling submit"
     if kind == "gave_up":
         return W, f"{node} stopped calling tools and never submitted (after {d.get('nudges')} reminders)"
+    if kind == "trimmed":
+        return I, (f"{node}'s context trimmed from ~{d.get('before')} to ~{d.get('after')} tokens "
+                   f"(kept its orders and last {d.get('kept_turns')} turns intact)")
     if kind == "wait":
         still = f"; still out: {', '.join(d['still_out'])}" if d.get("still_out") else ""
         if d.get("message"):

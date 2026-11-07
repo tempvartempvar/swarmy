@@ -74,6 +74,21 @@ class FatalProviderError(Exception):
     """Auth failure, unknown model, exhausted daily quota... Stops the whole sweep."""
 
 
+TRIM_MARK = "chars trimmed to save context"
+
+
+def clip_text(text: str, keep: int) -> str:
+    """The first `keep` characters plus a note; text already clipped (or short enough) is unchanged."""
+    if not isinstance(text, str) or len(text) <= keep + 120 or TRIM_MARK in text:
+        return text
+    return (text[:keep] + f"\n[... {len(text) - keep} more {TRIM_MARK}; re-read the file or re-run the tool if "
+            "you need them]")
+
+
+def clip_args(args: dict, keep: int) -> dict:
+    return {k: clip_text(v, keep) if isinstance(v, str) else v for k, v in (args or {}).items()}
+
+
 class Conversation(ABC):
     def __init__(self, system: str, tools: list[ToolSpec]):
         self.system = system
@@ -94,6 +109,11 @@ class Conversation(ABC):
     def approx_input_tokens(self) -> int:
         # Conservative (over-)estimate used only for the budget guard.
         return int(self.chars / 3) + 200
+
+    def trim(self, keep_turns: int, keep_chars: int) -> int:
+        """Clip older tool output, messages and tool-call arguments to keep_chars, leaving the first
+        user message (the order) and the last keep_turns assistant turns intact. Returns chars saved."""
+        return 0
 
 
 class Provider(ABC):

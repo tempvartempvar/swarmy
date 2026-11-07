@@ -844,7 +844,11 @@ function commPanel() {
   out.push(field("Format", select_([{ value: "structured", label: "structured: objective, context, deliverables, constraints, done when" },
     { value: "free", label: "free text" }], o.format || "structured", (v) => updO("format", v), "o-format"),
     "structured orders force commanders to break work into well-constrained tasks"));
-  out.push(field("Max length", num(o.max_chars ?? 4000, (v) => updO("max_chars", v || 4000), "o-max", { min: 200, step: 100 }), "characters per order"));
+  out.push(field("To commanders", num(o.max_chars ?? 3000, (v) => updO("max_chars", v || 3000), "o-max", { min: 200, step: 100 }), "max characters per order: outcomes, not procedures"));
+  out.push(field("To workers", num(o.max_chars_worker ?? 1800, (v) => updO("max_chars_worker", v || 1800), "o-max-w", { min: 200, step: 100 }), "max characters: one well-scoped task"));
+  out.push(field("Reports", num(o.max_report_chars ?? 3000, (v) => updO("max_report_chars", v || 3000), "o-report", { min: 300, step: 100 }), "max characters per report going up"));
+  out.push(check("Reject micromanagement", o.no_micromanaging !== false, (v) => updO("no_micromanaging", v),
+    "orders to a commander can't name the people under it; it decides who does what", "o-micro"));
   out.push(check("Reject orders that relay the commander's own orders verbatim", o.no_forwarding !== false, (v) => updO("no_forwarding", v),
     "also stops pasting orders into wikis", "o-fwd"));
   out.push(check("Commanders wait for every report before doing anything else (blocking orders)", o.blocking === true, (v) => updO("blocking", v),
@@ -855,6 +859,15 @@ function commPanel() {
   out.push(check("Ask", modes.includes("ask"), (v) => setMode("ask", v), "question and answer; the recipient answers from what they know so far", "c-ask"));
   out.push(check("Message", modes.includes("message"), (v) => setMode("message", v), "a note they see the next time they act", "c-msg"));
   out.push(field("Limit", num(c.max_messages ?? 8, (v) => upd("max_messages", v ?? 0), "c-max", { min: 0 }), "messages per agent per run"));
+  out.push(field("Message length", num(c.max_message_chars ?? 1500, (v) => upd("max_message_chars", v || 1500), "c-msg-len", { min: 100, step: 100 }), "max characters per message"));
+  out.push(field("Question length", num(c.max_question_chars ?? 800, (v) => upd("max_question_chars", v || 800), "c-q-len", { min: 100, step: 100 }), "max characters per question"));
+  out.push(field("Answer length", num(c.max_answer_tokens ?? 600, (v) => upd("max_answer_tokens", v || 600), "c-a-len", { min: 100, step: 100 }), "max tokens per answer"));
+  out.push(h("h3", {}, "Context"));
+  const cx = S.config.context = S.config.context || {};
+  const updC = (key, val) => mutate(() => (cx[key] = val));
+  out.push(field("Trim above", num(cx.max_tokens ?? 30000, (v) => updC("max_tokens", v || 30000), "x-max", { min: 2000, step: 1000 }),
+    "estimated tokens; older tool output, messages and file contents are cut to a stub"));
+  out.push(field("Keep intact", num(cx.keep_turns ?? 4, (v) => updC("keep_turns", v || 4), "x-keep", { min: 1 }), "most recent turns (plus the agent's orders)"));
   if (S.analysis) {
     const pairs = Object.values(S.analysis.contacts).reduce((a, l) => a + l.length, 0);
     const reach = Object.values(S.analysis.contacts).filter((l) => l.length).length;
@@ -1113,6 +1126,7 @@ function fmtEvent(ev) {
     case "crash": return h("div", { class: "ev bad" }, `${who} hit an internal error in ${d.where} (contained): ${d.error}`);
     case "checkin": return h("div", { class: "ev warn" }, `Check-in ${d.round}/${d.max} with ${who}: ${d.reason}`, pv(d.tests));
     case "checkin_skipped": return h("div", { class: "ev warn" }, `No check-in: ${d.reason}`);
+    case "trimmed": return h("div", { class: "ev" }, `${who}'s context trimmed: ~${d.before} → ~${d.after} tokens`);
     case "wait": return h("div", { class: "ev" }, `${who} waited ${Number(d.seconds || 0).toFixed(0)}s for reports: got ${(d.got || []).join(", ") || "none"}${d.still_out && d.still_out.length ? `; still out: ${d.still_out.join(", ")}` : ""}`);
     case "turn_limit": return h("div", { class: "ev warn" }, `${who} used all ${d.turns || ""} of its turns without submitting`);
     case "gave_up": return h("div", { class: "ev warn" }, `${who} stopped calling tools without submitting`);

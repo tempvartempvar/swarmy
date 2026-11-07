@@ -336,14 +336,27 @@ agents pasting orders into wikis. All of this is configurable, so it can be an e
 
 ```yaml
 orders:
-  format: structured     # structured | free (a single free-text task)
-  max_chars: 4000        # per order
-  no_forwarding: true    # reject verbatim relaying of one's own orders
-  blocking: false        # false: orders run in the background (see below)
+  format: structured       # structured | free (a single free-text task)
+  max_chars: 3000          # orders to commanders: outcomes, not procedures
+  max_chars_worker: 1800   # orders to hands-on workers: one well-scoped task
+  max_report_chars: 3000   # reports going up
+  no_micromanaging: true   # orders to a commander can't name the people under it
+  no_forwarding: true      # reject verbatim relaying of one's own orders
+  blocking: false          # false: orders run in the background (see below)
 ```
 
-Field limits and `max_chars` allow 10% over before an order is rejected. A rejected order costs a
-whole commander call, so being a few characters over shouldn't trigger one.
+**Scoped orders, no micromanagement.** Orders to hands-on workers get a lower length limit than
+orders to commanders. A worker's order should be one well-scoped task, with the next one sent when
+it reports, rather than one long order. Commanders are told to give outcomes, not procedures: what
+must be achieved, why, the constraints, and how the work will be judged, leaving the how to the
+subordinate. With `no_micromanaging`, an order to a commander that names anyone under it (for
+example the field marshal assigning work to `scout-1.1` in an order to the research captain) is
+rejected: the captain decides who does what. Reports going up have a limit too. An over-long report
+is rejected once with advice, then cut to the limit, and on an agent's last turn it's cut without a
+rejection.
+
+Field limits, order limits and the message limits below all allow 10% over before rejecting. A
+rejection costs a whole call, so being a few characters over shouldn't trigger one.
 
 **Orders run in the background.** `delegate` returns at once, and each order is worked on in
 parallel while the commander keeps going. It can start other units, check files, update the wiki,
@@ -479,6 +492,34 @@ communication:
   cc_skipped: true     # skipped officers get a copy of skip-level traffic
   modes: [ask, message]
   max_messages: 8      # per agent per run
+  max_message_chars: 1500
+  max_question_chars: 800
+  max_answer_tokens: 600   # answers to questions are short
+```
+
+A message or question over its limit is rejected without using up the agent's allowance, with a
+request to send the gist and point to a file or wiki page for details.
+
+### Context trimming
+
+Conversations grow with every tool result. In one real run a soldier was sending about 85k input
+tokens per call by the end, mostly old `run_python` output. When an agent's context passes
+`context.max_tokens` (an estimate), the following are cut to a short stub ending in "re-read the
+file or re-run the tool if you need them":
+
+- older tool output;
+- messages and reports it has already seen;
+- the bulky arguments of old tool calls, such as the full content of files it wrote.
+
+Its orders and its last `keep_turns` turns stay intact, and thinking blocks are never touched.
+Trimming happens all at once, down to about 60% of the limit, so prompt caching keeps working for
+the several turns until the next trim. The run log and feed record each trim.
+
+```yaml
+context:
+  max_tokens: 30000   # estimated input tokens before trimming
+  keep_turns: 4       # most recent turns kept intact
+  trim_to: 400        # characters kept from each trimmed item
 ```
 
 - `ask` asks a colleague a question and waits for the answer. The colleague answers in a side

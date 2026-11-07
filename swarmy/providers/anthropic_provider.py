@@ -20,6 +20,8 @@ from .base import (
     Retryable,
     StepResult,
     ToolCall,
+    clip_args,
+    clip_text,
     ToolResult,
     ToolSpec,
     Usage,
@@ -70,6 +72,42 @@ class AnthropicConversation(Conversation):
             if pending:
                 new.add_tool_results([ToolResult(i, PENDING_RESULT) for i in pending])
         return new
+
+    def trim(self, keep_turns: int, keep_chars: int) -> int:
+        turns = [i for i, m in enumerate(self.messages) if m["role"] == "assistant"]
+        if len(turns) <= keep_turns:
+            return 0
+        boundary = turns[-keep_turns]
+        saved = 0
+        for i in range(1, boundary):  # messages[0] is the order
+            m = self.messages[i]
+            blocks = []
+            for b in m["content"]:
+                if isinstance(b, dict):
+                    if b.get("type") == "tool_result" and isinstance(b.get("content"), str):
+                        new = clip_text(b["content"], keep_chars)
+                        saved += len(b["content"]) - len(new)
+                        b = {**b, "content": new}
+                    elif b.get("type") == "text":
+                        new = clip_text(b.get("text", ""), keep_chars)
+                        saved += len(b.get("text", "")) - len(new)
+                        b = {**b, "text": new}
+                else:  # SDK blocks from the model; thinking blocks are signed and stay as they are
+                    kind = getattr(b, "type", "")
+                    if kind == "text":
+                        new = clip_text(b.text, keep_chars)
+                        if new != b.text:
+                            saved += len(b.text) - len(new)
+                            b = b.model_copy(update={"text": new})
+                    elif kind == "tool_use" and isinstance(getattr(b, "input", None), dict):
+                        new = clip_args(b.input, keep_chars)
+                        if new != b.input:
+                            saved += len(json.dumps(b.input, default=str)) - len(json.dumps(new, default=str))
+                            b = b.model_copy(update={"input": new})
+                blocks.append(b)
+            m["content"] = blocks
+        self.chars = max(0, self.chars - saved)
+        return saved
 
     def add_assistant(self, content: list) -> None:
         for block in content:

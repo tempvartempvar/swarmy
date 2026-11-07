@@ -112,6 +112,9 @@ class CommunicationRules(BaseModel):
     skip_down: int = Field(0, ge=0)
     cc_skipped: bool = True
     modes: list[Literal["ask", "message"]] = ["ask", "message"]
+    max_message_chars: int = Field(1500, ge=100)  # per send_message
+    max_question_chars: int = Field(800, ge=100)  # per ask
+    max_answer_tokens: int = Field(600, ge=100)  # answers to questions are short
     max_messages: int = Field(8, ge=0)  # per agent per run
 
     @property
@@ -135,6 +138,19 @@ class CheckinRules(BaseModel):
     min_budget_frac: float = Field(0.15, ge=0, le=1)
 
 
+class ContextRules(BaseModel):
+    """Keeping conversations small. When an agent's context passes max_tokens (estimated), older tool
+    output, messages, reports and the bulky arguments of old tool calls (e.g. file contents it wrote)
+    are cut to trim_to characters each; its orders and its last keep_turns turns stay intact. Trimming
+    happens in one go when the limit is crossed (down to about 60% of it), so prompt caching keeps
+    working between trims."""
+
+    model_config = ConfigDict(extra="forbid")
+    max_tokens: int = Field(30000, ge=2000)
+    keep_turns: int = Field(4, ge=1)
+    trim_to: int = Field(400, ge=100)
+
+
 class OrderRules(BaseModel):
     """How commanders must write orders.
 
@@ -144,11 +160,17 @@ class OrderRules(BaseModel):
     blocking: when false (the default), `delegate` returns at once and reports arrive as subordinates
     finish, so a commander can start several units, keep working and collect reports with `wait`. When
     true, `delegate` waits for every report before returning (commanders can't act in the meantime).
+    Length limits: max_chars for orders to commanders, max_chars_worker for orders to hands-on workers
+    (one well-scoped task), max_report_chars for reports going up. no_micromanaging rejects orders to a
+    commander that name positions below it: the commander decides how to split its own work.
     """
 
     model_config = ConfigDict(extra="forbid")
     format: Literal["structured", "free"] = "structured"
-    max_chars: int = Field(4000, ge=200)
+    max_chars: int = Field(3000, ge=200)
+    max_chars_worker: int = Field(1800, ge=200)
+    max_report_chars: int = Field(3000, ge=300)
+    no_micromanaging: bool = True
     no_forwarding: bool = True
     blocking: bool = False
 
@@ -195,6 +217,7 @@ class OrgConfig(BaseModel):
     communication: CommunicationRules = CommunicationRules()
     orders: OrderRules = OrderRules()
     checkins: CheckinRules = CheckinRules()
+    context: ContextRules = ContextRules()
     memory: Literal["persistent", "fresh"] = "persistent"
     disclose_models: bool = True  # tell commanders which model each subordinate runs
     manager_max_turns: int = 12

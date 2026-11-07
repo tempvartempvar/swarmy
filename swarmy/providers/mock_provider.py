@@ -10,7 +10,7 @@ import json
 import re
 
 from ..catalog import ModelSpec
-from .base import Conversation, Provider, StepResult, ToolCall, ToolResult, ToolSpec, Usage
+from .base import Conversation, Provider, StepResult, ToolCall, ToolResult, ToolSpec, Usage, clip_text
 
 _ids = itertools.count(1)
 
@@ -29,6 +29,24 @@ class MockConversation(Conversation):
         for r in results:
             self.chars += len(r.content)
         self.events.append(("tool", results))
+
+    def trim(self, keep_turns: int, keep_chars: int) -> int:
+        turns = [i for i, (kind, _) in enumerate(self.events) if kind == "assistant"]
+        if len(turns) <= keep_turns:
+            return 0
+        boundary, saved = turns[-keep_turns], 0
+        for i in range(boundary):
+            kind, payload = self.events[i]
+            if kind == "user" and not str(payload).startswith(("Assignment from", "Orders from", "[Side conversation]")):
+                new = clip_text(payload, keep_chars)
+                saved += len(payload) - len(new)
+                self.events[i] = (kind, new)
+            elif kind == "tool":
+                new = [ToolResult(r.call_id, clip_text(r.content, keep_chars), r.is_error) for r in payload]
+                saved += sum(len(a.content) - len(b.content) for a, b in zip(payload, new))
+                self.events[i] = (kind, new)
+        self.chars = max(0, self.chars - saved)
+        return saved
 
     def fork(self) -> "MockConversation":
         new = MockConversation(self.system, self.tool_specs)
