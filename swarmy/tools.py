@@ -36,6 +36,11 @@ ORDER_FIELDS = [  # (key, heading, required, max chars, description)
     ("constraints", "CONSTRAINTS", False, 1200, "interfaces, limits, rules, what not to do"),
     ("done_when", "DONE WHEN", True, 600, "the test that shows the task is finished"),
 ]
+STATUS_WORDS = 5  # the status update shown on the org chart when an order is finished
+STATUS_FIELD = {"type": "string", "description": f"a status update of at most {STATUS_WORDS} words, shown on the org "
+                "chart (e.g. 'Simulator matches all sample cases')"}
+STATUS_FALLBACK = {"turn_limit": "Ran out of turns", "no_submit": "Stopped without submitting",
+                   "error": "Stopped by an error", "refused": "Declined the order"}
 FORWARD_LIMIT = 300  # verbatim characters of your own orders an order or wiki edit may repeat
 
 
@@ -155,13 +160,14 @@ def tool_specs(agent: "Agent", ctx: "RunContext") -> list[ToolSpec]:
 
     if agent.parent is None:
         props = {"answer": {"type": "string", "description": "the final answer only"},
-                 "report": {"type": "string", "description": "short summary of how the work was done"}}
-        required = ["answer"] if task.answer_required else ["report"]
+                 "report": {"type": "string", "description": "short summary of how the work was done"},
+                 "status": STATUS_FIELD}
+        required = (["answer"] if task.answer_required else ["report"]) + ["status"]
         specs.append(ToolSpec("submit", "Deliver the final result to the client. This ends your work.",
                               _obj(props, required)))
     else:
         specs.append(ToolSpec("submit", f"Send your report to {agent.parent.name}. This ends your current assignment.",
-                              _obj({"report": {"type": "string"}}, ["report"])))
+                              _obj({"report": {"type": "string"}, "status": STATUS_FIELD}, ["report", "status"])))
     return specs
 
 
@@ -302,9 +308,10 @@ class Toolbox:
         for to, fut in futures.items():
             rep = fut.result()
             ctx.event(by_name[to], "report", {"to": agent.name, "chars": len(rep["report"]), "status": rep["status"],
+                                              "status_line": rep["status_line"],
                                               "order_id": order_ids[to], "text": rep["report"],
                                               "preview": rep["report"][:240]})
-            parts.append(f"### Report from {to} [{rep['status']}]\n{rep['report']}")
+            parts.append(f"### Report from {to} [{rep['status']}]: {rep['status_line']}\n{rep['report']}")
         if ctx.task.has_workspace:
             score = await asyncio.to_thread(ctx.task.progress, ctx.workspace)
             if score is not None:

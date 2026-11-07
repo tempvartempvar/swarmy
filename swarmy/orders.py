@@ -35,7 +35,7 @@ def load_orders(tracer: Tracer, run_id: str, org_json: str | None = None) -> dic
                            "fields": d.get("fields"), "round": d.get("round", 1), "t": t, "report": None}
         elif e["kind"] == "report" and oid in orders:
             orders[oid]["report"] = {"status": d.get("status"), "text": d.get("text", d.get("preview", "")),
-                                     "answer": d.get("answer"), "t": t}
+                                     "answer": d.get("answer"), "t": t, "status_line": d.get("status_line")}
     goals = {}
     org_json = org_json or (run[0]["org_json"] if run else None)
     if org_json:

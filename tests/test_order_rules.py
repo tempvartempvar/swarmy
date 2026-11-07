@@ -1,6 +1,7 @@
 """Structured orders, no verbatim relaying, curated wiki edits."""
 
 import asyncio
+import json
 
 import pytest
 
@@ -128,7 +129,7 @@ def test_submit_reminder_once(tmp_path):
     class Submitter(MockProvider):
         async def step(self, conv, spec, *, max_tokens, effort, tool_choice=None):
             calls.append(1)
-            call = ToolCall(f"s{len(calls)}", "submit", {"report": "done"})
+            call = ToolCall(f"s{len(calls)}", "submit", {"report": "done", "status": "Found the pump flow"})
             conv.events.append(("assistant", [call]))
             return StepResult(text="", tool_calls=[call], usage=Usage(), stop_reason="tool_use", latency_s=0)
 
@@ -138,3 +139,65 @@ def test_submit_reminder_once(tmp_path):
     rep = asyncio.run(private.handle("Orders from captain: find the pump flow.", ctx, order_id=1))
     assert rep["status"] == "submitted" and len(calls) == 2
     assert ctx.tracer.query("SELECT 1 FROM events WHERE kind='wiki_reminder'")
+
+
+
+def _scripted_submits(tmp_path, statuses, wikis=False):
+    """A private submitting with each status in turn; returns (result, number of calls, tool results)."""
+    from swarmy.providers import StepResult, Usage
+    from swarmy.providers.mock_provider import MockProvider
+
+    calls, results = [], []
+
+    class Submitter(MockProvider):
+        async def step(self, conv, spec, *, max_tokens, effort, tool_choice=None):
+            if conv.events and conv.events[-1][0] == "tool":
+                results.append(conv.events[-1][1][0].content)
+            args = {"report": "done"}
+            status = statuses[min(len(calls), len(statuses) - 1)]
+            if status is not None:
+                args["status"] = status
+            calls.append(1)
+            call = ToolCall(f"s{len(calls)}", "submit", args)
+            conv.events.append(("assistant", [call]))
+            return StepResult(text="", tool_calls=[call], usage=Usage(), stop_reason="tool_use", latency_s=0)
+
+    extra = {} if wikis else {"knowledge": {"wikis": []}}
+    ctx, root = _ctx(tmp_path, **extra)
+    ctx.registry._providers["mock"] = Submitter()
+    rep = asyncio.run(ctx.agents["private-1"].handle("Orders from captain: find the pump flow.", ctx, order_id=1))
+    return rep, len(calls), results, ctx
+
+
+def test_status_update_is_at_most_five_words(tmp_path):
+    rep, n, _, ctx = _scripted_submits(tmp_path / "a", ["  Pump   flow found:  10 l/min "])
+    assert n == 1 and rep["status_line"] == "Pump flow found: 10 l/min"
+    ev = [json.loads(r["data_json"]) for r in ctx.tracer.query("SELECT data_json FROM events WHERE kind='agent_done'")]
+    assert ev[-1]["status_line"] == "Pump flow found: 10 l/min"
+
+
+def test_long_or_missing_status_is_rejected_once_then_trimmed(tmp_path):
+    long = "I found the pump flow rate and recorded it on the wiki"
+    rep, n, results, _ = _scripted_submits(tmp_path / "a", [long])
+    assert n == 2 and "at most 5 words" in results[0] and "yours has 12 words" in results[0]
+    assert rep["status"] == "submitted" and rep["status_line"] == "I found the pump flow"
+    rep, n, results, _ = _scripted_submits(tmp_path / "b", [None, "Pump flow found"])
+    assert n == 2 and "it is missing" in results[0] and rep["status_line"] == "Pump flow found"
+    rep, n, _, _ = _scripted_submits(tmp_path / "c", [None])
+    assert n == 2 and rep["status_line"] == "Done"
+
+
+def test_turn_limit_gets_a_fallback_status(tmp_path):
+    from swarmy.providers import StepResult, Usage
+    from swarmy.providers.mock_provider import MockProvider
+
+    class Reader(MockProvider):
+        async def step(self, conv, spec, *, max_tokens, effort, tool_choice=None):
+            call = ToolCall("r", "wiki_read", {"wiki": "orders"})
+            conv.events.append(("assistant", [call]))
+            return StepResult(text="", tool_calls=[call], usage=Usage(), stop_reason="tool_use", latency_s=0)
+
+    ctx, root = _ctx(tmp_path, worker_max_turns=2)
+    ctx.registry._providers["mock"] = Reader()
+    rep = asyncio.run(ctx.agents["private-1"].handle("Orders from captain: read.", ctx, order_id=1))
+    assert rep["status"] == "turn_limit" and rep["status_line"] == "Ran out of turns"

@@ -69,7 +69,8 @@ def describe_event(node: str, kind: str, d: dict) -> tuple[int, str]:
                    f"{_clip(fields.get('objective') or d.get('preview'))}")
     if kind == "report":
         lvl = I if d.get("status") == "submitted" else W
-        return lvl, f"{node} -> {d.get('to')}: report on order #{d.get('order_id')} [{d.get('status')}]: {_clip(d.get('preview'))}"
+        line = f" \"{d['status_line']}\"" if d.get("status_line") else ""
+        return lvl, f"{node} -> {d.get('to')}: report on order #{d.get('order_id')} [{d.get('status')}]{line}: {_clip(d.get('preview'))}"
     if kind == "tool":
         if d.get("ok"):
             return D, f"{node} {d.get('name')}: ok"
@@ -89,7 +90,7 @@ def describe_event(node: str, kind: str, d: dict) -> tuple[int, str]:
     if kind == "agent_done":
         lvl = I if d.get("status") == "submitted" else W
         return lvl, (f"{node} finished order #{d.get('order_id')} [{d.get('status')}] after {d.get('turns')} turn(s), "
-                     f"{d.get('seconds', 0):.1f}s")
+                     f"{d.get('seconds', 0):.1f}s" + (f": \"{d['status_line']}\"" if d.get("status_line") else ""))
     if kind == "checkin":
         tests = (d.get("tests") or "").strip().splitlines()
         shown = "".join(f"\n    {ln[:200]}" for ln in tests[:14]) + (f"\n    … {len(tests) - 14} more lines" if len(tests) > 14 else "")

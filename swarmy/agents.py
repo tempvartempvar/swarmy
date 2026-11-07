@@ -11,7 +11,7 @@ from .config import Node, NodeSettings, OrgConfig
 from .prompts import NUDGE, system_prompt
 from .errors import stops_run
 from .providers import ProviderError, ToolResult
-from .tools import tool_specs, validate_args
+from .tools import STATUS_FALLBACK, STATUS_WORDS, tool_specs, validate_args
 
 if TYPE_CHECKING:
     from .runner import RunContext
@@ -34,6 +34,7 @@ class Agent:
         self.current_order_text: str = ""  # its text (used to stop verbatim forwarding)
         self.wiki_writes = 0  # wiki edits during the current assignment
         self.reminded = False
+        self.status_warned = False  # told once per order to give a short status
         self.turns = 0  # model calls during the current assignment
 
     def max_turns(self, org: OrgConfig) -> int:
@@ -55,7 +56,7 @@ class Agent:
     async def handle(self, text: str, ctx: "RunContext", order_id: int | None = None) -> dict:
         """Work on one assignment until `submit` (or a limit). Returns {report, answer, status}."""
         if order_id is None or order_id != self.current_order:  # a new order (a check-in continues the same one)
-            self.wiki_writes, self.reminded = 0, False
+            self.wiki_writes, self.reminded, self.status_warned = 0, False, False
             self.current_order_text = text
         self.current_order = order_id
         self.turns = 0
@@ -75,10 +76,25 @@ class Agent:
                       "answer": None, "status": "error"}
         finally:
             ctx.active.discard(self.name)
+        result.setdefault("status_line", STATUS_FALLBACK.get(result["status"], result["status"]))
         ctx.event(self, "agent_done", {"order_id": order_id, "status": result["status"], "turns": self.turns,
-                                       "seconds": round(time.monotonic() - t0, 2)})
-        ctx.live(self, "done", {"status": result["status"]})
+                                       "seconds": round(time.monotonic() - t0, 2), "status_line": result["status_line"]})
+        ctx.live(self, "done", {"status": result["status"], "line": result["status_line"]})
         return result
+
+    def _status_problem(self, args: dict) -> str | None:
+        """Check the submit `status` (at most STATUS_WORDS words). Rejects once per order with an example;
+        after that it keeps the first words, so a cosmetic field never blocks the work."""
+        words = str(args.get("status") or "").split()
+        if words and len(words) <= STATUS_WORDS:
+            args["status"] = " ".join(words)
+            return None
+        if not self.status_warned:
+            self.status_warned = True
+            got = f"yours has {len(words)} words" if words else "it is missing"
+            return (f"Submission rejected: `status` must be a status update of at most {STATUS_WORDS} words for the "
+                    f"org chart ({got}), e.g. 'Simulator matches all sample cases'. Call submit again with it.")
+        args["status"] = " ".join(words[:STATUS_WORDS]) or "Done"
 
     async def _handle(self, text: str, ctx: "RunContext") -> dict:
         provider = ctx.registry.provider_for(self.model)
@@ -142,7 +158,8 @@ class Agent:
             submission = None
             for call in sorted(result.tool_calls, key=lambda c: c.name == "submit"):
                 if call.name == "submit" and call.error is None and "submit" in self.specs:
-                    problem = validate_args(self.specs["submit"], call.arguments)
+                    problem = (validate_args(self.specs["submit"], {**call.arguments, "status": "x"})
+                               or self._status_problem(call.arguments))
                     if problem:
                         outputs[call.id] = ToolResult(call.id, f"Submission rejected: {problem}", True)
                     elif self._should_remind(ctx):
@@ -166,7 +183,8 @@ class Agent:
             if submission is not None:
                 answer = submission.get("answer")
                 return {"report": str(submission.get("report") or answer or ""),
-                        "answer": None if answer is None else str(answer), "status": "submitted"}
+                        "answer": None if answer is None else str(answer), "status": "submitted",
+                        "status_line": submission["status"]}
 
         ctx.event(self, "turn_limit", {"turns": limit})
         return {"report": f"[turn limit reached] {last_text}", "answer": None, "status": "turn_limit"}

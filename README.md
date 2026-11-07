@@ -165,6 +165,14 @@ swarmy ui [--port 8765] [--orgs-dir configs/orgs]
   and watch it live. Agents light up while they think, wait or answer; orders and reports flash along
   the edges; messages arc between cards; and an activity feed shows orders, reports, questions with
   their answers, and wiki edits as they happen.
+  - A **live cost chart** shows cumulative spend over time, stacked into the top position, the other
+    officers and the soldiers, so the top edge is the total. Hover it for the split at any moment.
+    Spending is shown against the budget, and a dashed budget line appears once spending passes half
+    of it. Below the chart, a table lists each position's model, calls, cost and last status.
+  - **Status updates.** Every agent finishing an order gives a status of at most five words
+    ("Pump specs verified and recorded"). Each card shows its position's latest status during the
+    run, in place of the model badge (a checkbox switches back). Statuses also appear in the feed,
+    the chain of orders, the run log, and the header of each report a commander receives.
 - **Run explorer.** Inspect any run, live or past:
   - *Chain of orders*: the mission at the top, then every order each commander issued, nested under the
     order it came from, with each recipient's standing goal, the full order, how it was split further,
@@ -377,6 +385,12 @@ You can read it in four places:
 
 The end reason is also in `result.json` (`end_reason`), in the designer's result box, and in the
 `runs` table.
+
+**Status updates.** `submit` takes a required `status` of at most five words, so finishing an order
+also produces a one-line update at no extra cost. A missing or longer status is rejected once with
+an example. If it happens again, the first five words are kept, so this field never blocks real
+work. Orders that end without a submit get a standard status, such as "Ran out of turns" or
+"Stopped by an error".
 
 Before a real run, swarmy checks every model the org uses with one tiny tool-enabled call each,
 sent in parallel the way agents will call it. This costs a fraction of a cent, and a model that

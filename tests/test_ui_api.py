@@ -100,6 +100,13 @@ def test_mock_run_with_live_state(server):
     assert st["summary"]["status"] == "completed"
     assert set(st["states"].values()) == {"done"}
     assert any(e["type"] == "event" and e["kind"] == "assign" for e in st["events"])
+    # live cost chart data: one point per call, tagged with who paid; five-word statuses per position
+    pts = st["cost_points"]
+    assert len(pts) == st["summary"]["n_calls"] == st["cnext"] and {p[2] for p in pts} <= {"top", "officer", "soldier"}
+    assert all(b[0] >= a[0] for a, b in zip(pts, pts[1:])) and sum(st["calls"].values()) == len(pts)
+    assert st["lines"] and all(len(v.split()) <= 5 for v in st["lines"].values())
+    _, later = call(f"/api/runs/{started['run']}?since={st['next']}&csince={st['cnext']}")
+    assert later["cost_points"] == [] and later["events"] == []
 
 
 def test_real_run_requires_confirmation(server):

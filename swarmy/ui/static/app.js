@@ -476,7 +476,7 @@ function renderChart() {
     if (showContacts && S.selected !== id && contactNames.size && !contactNames.has(name)) cls += " dim";
     const gn = s("g", { class: cls, transform: `translate(${p.x},${p.y})`, style: "cursor:pointer",
       onclick: (e) => { e.stopPropagation(); select(id); } });
-    gn.append(s("title", {}, `${name} — ${titleCase(n.role)}${gloss(n.role) ? " (" + gloss(n.role) + ")" : ""}\nmodel: ${n.model}${n.effort ? " (" + n.effort + ")" : ""}${n.goal ? "\ngoal: " + n.goal : ""}`));
+    gn.append(s("title", {}, `${name} — ${titleCase(n.role)}${gloss(n.role) ? " (" + gloss(n.role) + ")" : ""}\nmodel: ${n.model}${n.effort ? " (" + n.effort + ")" : ""}${n.goal ? "\ngoal: " + n.goal : ""}${run && run.lines[name] ? "\nstatus: " + run.lines[name] : ""}`));
     if (run) gn.append(s("rect", { class: "state", x: -4, y: -4, width: W + 8, height: H + 8, rx: 13 }));
     const strokeAttrs = wikiWriters && wikiWriters.has(name) ? { stroke: WIKI_COLORS[S.selectedWiki % WIKI_COLORS.length], "stroke-width": 2.5 }
       : wikiReaders && wikiReaders.has(name) ? { stroke: WIKI_COLORS[S.selectedWiki % WIKI_COLORS.length], "stroke-width": 2, "stroke-dasharray": "4 3" } : {};
@@ -484,12 +484,19 @@ function renderChart() {
     gn.append(s("rect", { x: 0, y: 8, width: 4, height: H - 16, rx: 2, fill: color }));
     gn.append(s("text", { class: "role", x: 14, y: 21 }, trunc(titleCase(n.role), 21)));
     gn.append(s("text", { class: "nm", x: 14, y: 36 }, trunc(name, 26)));
-    const label = trunc(modelLabel(n.model), 16), bw = label.length * 6.2 + 12;
-    gn.append(s("rect", { x: 13, y: 46, width: bw, height: 18, rx: 5, fill: color }));
-    gn.append(s("text", { class: "mdl", x: 19, y: 59 }, label));
-    if (n.effort) gn.append(s("text", { class: "eff", x: 13 + bw + 6, y: 59 }, n.effort));
+    const line = run && S.showLines !== false ? run.lines[name] : null;
+    if (line) {  // the five-word status from its last finished order, in place of the model badge
+      const [l1, l2] = wrap2(line, 25);
+      gn.append(s("text", { class: "line", x: 14, y: 54 }, `“${l1}${l2 ? "" : "”"}`));
+      if (l2) gn.append(s("text", { class: "line", x: 19, y: 67 }, `${trunc(l2, 24)}”`));
+    } else {
+      const label = trunc(modelLabel(n.model), 16), bw = label.length * 6.2 + 12;
+      gn.append(s("rect", { x: 13, y: 46, width: bw, height: 18, rx: 5, fill: color }));
+      gn.append(s("text", { class: "mdl", x: 19, y: 59 }, label));
+      if (n.effort) gn.append(s("text", { class: "eff", x: 13 + bw + 6, y: 59 }, n.effort));
+    }
     // icons: wiki access / contacts
-    if (S.analysis && m) {
+    if (S.analysis && m && !line) {
       const nW = S.analysis.wikis.filter((w) => w.readers.includes(name) || w.writers.includes(name)).length;
       const nC = (S.analysis.contacts[name] || []).length;
       let icons = [];
@@ -498,7 +505,7 @@ function renderChart() {
       if (nC) icons.push(`⇄${nC}`);
       if (icons.length) gn.append(s("text", { class: "ico", x: W - 8, y: 18, "text-anchor": "end" }, icons.join("  ")));
     }
-    if (run && run.costs[name] != null) gn.append(s("text", { class: "cost", x: W - 8, y: H - 10, "text-anchor": "end" }, money(run.costs[name])));
+    if (run && run.costs[name] != null) gn.append(s("text", { class: "cost", x: W - 8, y: line ? 18 : H - 10, "text-anchor": "end" }, money(run.costs[name])));
     if (n.children && n.children.length) {
       const collapsed = S.collapsed.has(id);
       const stackedKids = S.pos[n.children[0]._id] && S.pos[n.children[0]._id].stackedUnder === id;
@@ -902,8 +909,12 @@ function runPanel() {
       running ? "Running…" : cfg.mock ? "Start mock run" : "Start real run")));
   if (cfg.mock) out.push(h("p", { class: "small muted" }, "Mock runs use scripted placeholder agents: they check the wiring for free, but every order, note and report they write is a placeholder."));
   if (r) {
+    const runStart = out.length;
     const secs = ((r.finished || Date.now() / 1000) - r.started).toFixed(1);
     out.push(h("p", { class: "small" }, r.mock ? h("span", { class: "mock-tag" }, "MOCK") : null, ` ${r.status} · ${secs}s · spent ${money(r.total_cost)} of $${Number(r.budget).toFixed(2)} · ${r.task}`));
+    out.push(costChart(r));
+    out.push(check("Show status updates on the chart", S.showLines !== false, (v) => { S.showLines = v; renderChart(); renderPanel(); }, "each position's latest five-word status, in place of its model badge", "r-lines"));
+    out.push(costTable(r));
     if (r.summary) {
       const sm = r.summary;
       out.push(h("div", { class: "result" },
@@ -924,6 +935,9 @@ function runPanel() {
           h("button", { onclick: () => openExplorer("log", r.run_id) }, "Log"))));
     }
     if (r.error) out.push(h("pre", { class: "small", style: "white-space:pre-wrap;color:var(--danger)" }, r.error));
+    // the current run first, so its cost chart is visible without scrolling; the form for the next run below
+    const block = out.splice(runStart);
+    out.splice(2, 0, h("h3", {}, running ? "This run" : "Last run"), ...block, h("h3", {}, "Start a run"));
     out.push(h("h3", {}, "Activity"));
     const feed = h("div", { class: "feed" });
     (r.feed || []).slice(-250).reverse().forEach((ev) => feed.append(ev));
@@ -931,6 +945,109 @@ function runPanel() {
   }
   return out;
 }
+/* ---------------- live cost chart ---------------- */
+const COST_GROUPS = [["top", "Top position"], ["officer", "Officers"], ["soldier", "Soldiers"]];
+function wrap2(text, n) {  // two lines of at most ~n characters, split on words
+  const words = String(text).split(/\s+/);
+  let a = "";
+  while (words.length && (a + " " + words[0]).trim().length <= n) a = (a + " " + words.shift()).trim();
+  if (!a) a = words.shift() || "";
+  return [a, words.join(" ")];
+}
+function niceStep(range, n) {
+  const raw = range / n, mag = 10 ** Math.floor(Math.log10(raw)), f = raw / mag;
+  return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * mag;
+}
+const fmtSecs = (t) => (t < 60 ? `${Math.round(t)}s` : t < 3600 ? `${+(t / 60).toFixed(1)}m` : `${+(t / 3600).toFixed(1)}h`);
+const TIME_STEPS = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1200, 1800, 3600, 7200, 14400];
+const timeStep = (end) => TIME_STEPS.find((st) => end / st <= 5) || 14400;
+const fmtUsd = (v, step) => "$" + v.toFixed(step >= 0.1 ? 2 : step >= 0.01 ? 2 : step >= 0.001 ? 3 : 4);
+function costSeries(r) {
+  const acc = { top: 0, officer: 0, soldier: 0 }, rows = [{ t: 0, ...acc }];
+  for (const [t, c, g] of r.cpts || []) { acc[g] = (acc[g] || 0) + c; rows.push({ t, ...acc }); }
+  const running = r.status === "running";
+  const end = Math.max(running ? r.now || 0 : (r.summary ? Number(r.summary.wall_s) : r.now || 0), rows[rows.length - 1].t, 1);
+  rows.push({ t: end, ...acc });  // hold the last value to now
+  return { rows, acc, end };
+}
+function costChart(r) {
+  const { rows, acc, end } = costSeries(r);
+  const total = acc.top + acc.officer + acc.soldier;
+  const present = COST_GROUPS.filter(([g]) => acc[g] > 0 || Object.values(S.idx).some((e) => costGroupOf(e) === g));
+  const VW = 420, VH = 180, m = { l: 46, r: 76, t: 10, b: 22 }, pw = VW - m.l - m.r, ph = VH - m.t - m.b;
+  let yMax = Math.max(total * 1.15, 0.0005);
+  const budget = Number(r.budget) || 0, showBudget = budget > 0 && total >= budget * 0.5;  // only once it matters
+  if (showBudget) yMax = Math.max(yMax, budget * 1.06);
+  const step = niceStep(yMax, 3); yMax = Math.ceil(yMax / step) * step;
+  const x = (t) => m.l + (t / end) * pw, y = (v) => m.t + ph - (v / yMax) * ph;
+  const svg = s("svg", { viewBox: `0 0 ${VW} ${VH}`, class: "cost-svg", role: "img",
+    "aria-label": `Cumulative cost over time: ${money(total)} after ${fmtSecs(end)}` });
+  for (let v = 0; v <= yMax + 1e-12; v += step) {  // recessive grid + y labels
+    svg.append(s("line", { class: "grid", x1: m.l, x2: m.l + pw, y1: y(v), y2: y(v) }));
+    svg.append(s("text", { class: "tick", x: m.l - 6, y: y(v) + 3.5, "text-anchor": "end" }, fmtUsd(v, step)));
+  }
+  const xstep = timeStep(end);
+  for (let t = 0; t <= end + 1e-9; t += xstep) svg.append(s("text", { class: "tick", x: x(t), y: VH - 6, "text-anchor": "middle" }, fmtSecs(t)));
+  // stacked step areas, bottom to top: top position, officers, soldiers
+  const thin = rows.length > 600 ? rows.filter((_, i) => i % Math.ceil(rows.length / 600) === 0 || i === rows.length - 1) : rows;
+  let base = thin.map(() => 0);
+  COST_GROUPS.forEach(([g], i) => {
+    if (!present.some(([p]) => p === g)) return;
+    const upper = thin.map((row, k) => base[k] + row[g]);
+    let d = `M${x(thin[0].t)},${y(upper[0])}`;
+    for (let k = 1; k < thin.length; k++) d += `H${x(thin[k].t)}V${y(upper[k])}`;
+    for (let k = thin.length - 1; k > 0; k--) d += `V${y(base[k])}H${x(thin[k - 1].t)}`;
+    d += `V${y(base[0])}Z`;
+    svg.append(s("path", { d, class: `area s${i + 1}` }));
+    base = upper;
+  });
+  svg.append(s("line", { class: "axis", x1: m.l, x2: m.l + pw, y1: y(0), y2: y(0) }));
+  if (showBudget) {
+    svg.append(s("line", { class: "budget", x1: m.l, x2: m.l + pw, y1: y(budget), y2: y(budget) }));
+    svg.append(s("text", { class: "tick", x: m.l + pw + 6, y: y(budget) + 3.5 }, `budget $${budget.toFixed(2)}`));
+  }
+  svg.append(s("text", { class: "end-val", x: m.l + pw + 6, y: Math.min(y(total) + 4, m.t + ph - 2) }, money(total)));
+  // crosshair + tooltip (one readout, every series), kept across re-renders
+  const wrapEl = h("div", { class: "cost-chart" });
+  const hair = s("line", { class: "hair", y1: m.t, y2: m.t + ph, visibility: "hidden" });
+  svg.append(hair);
+  const tip = h("div", { class: "cost-tip", hidden: true });
+  const show = (fx) => {
+    const t = Math.max(0, Math.min(end, ((fx * VW) - m.l) / pw * end));
+    let lo = 0, hi = rows.length - 1;  // last row at or before t
+    while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (rows[mid].t <= t) lo = mid; else hi = mid - 1; }
+    const row = rows[lo], tot = row.top + row.officer + row.soldier;
+    hair.setAttribute("x1", x(t)); hair.setAttribute("x2", x(t)); hair.setAttribute("visibility", "visible");
+    tip.replaceChildren(h("div", { class: "tt-h" }, `at ${fmtSecs(t)}`), h("div", { class: "tt-row" }, h("strong", {}, money(tot)), " total"),
+      ...present.slice().reverse().map(([g, label]) => h("div", { class: "tt-row" }, h("span", { class: `key s${COST_GROUPS.findIndex(([k]) => k === g) + 1}` }), h("strong", {}, money(row[g])), ` ${label}`)));
+    tip.hidden = false;
+    tip.style.left = `${Math.min(fx * 100, 62)}%`;
+  };
+  svg.addEventListener("pointermove", (e) => { const b = svg.getBoundingClientRect(); S.costHover = (e.clientX - b.left) / b.width; show(S.costHover); });
+  svg.addEventListener("pointerleave", () => { S.costHover = null; hair.setAttribute("visibility", "hidden"); tip.hidden = true; });
+  if (S.costHover != null) requestAnimationFrame(() => show(S.costHover));
+  const legend = h("div", { class: "cost-legend" }, present.map(([g, label]) => h("span", { class: "item" },
+    h("span", { class: `key s${COST_GROUPS.findIndex(([k]) => k === g) + 1}` }), `${label} `, h("strong", {}, money(acc[g])))));
+  wrapEl.append(h("div", { class: "cost-head" }, h("strong", {}, "Cost so far"), h("span", { class: "muted small" }, ` ${money(total)} of $${budget.toFixed(2)} budget`)), legend, svg, tip);
+  return wrapEl;
+}
+function costGroupOf(e) {
+  return !e || !e.node ? null : e.parent == null ? "top" : (e.node.children && e.node.children.length) ? "officer" : "soldier";
+}
+function costTable(r) {
+  const names = Object.keys({ ...r.costs, ...r.lines });
+  if (!names.length) return h("div");
+  const rows = names.map((name) => {
+    const id = S.nameToId[name], n = id != null ? info(id).node : null;
+    return { name, role: n ? n.role : "", model: n ? n.model : "", calls: (r.calls || {})[name] || 0, cost: r.costs[name] || 0, line: r.lines[name] || "" };
+  }).sort((a, b) => b.cost - a.cost);
+  return h("details", { class: "cost-table", open: S.costTableOpen || null, ontoggle: (e) => (S.costTableOpen = e.target.open) },
+    h("summary", { class: "small" }, `Cost and status by position (${rows.length})`),
+    h("table", {}, h("tr", {}, ["Position", "Model", "Calls", "Cost", "Last status"].map((c) => h("th", {}, c))),
+      rows.map((x) => h("tr", {}, h("td", {}, x.name, " ", x.role ? rankBadge(x.role) : null), h("td", {}, x.model), h("td", { class: "num" }, String(x.calls)),
+        h("td", { class: "num" }, money(x.cost)), h("td", {}, x.line)))));
+}
+
 function fmtEvent(ev) {
   const d = ev.data || {}, who = ev.node;
   const pv = (t) => (t ? h("span", { class: "pv" }, trunc(t, 220)) : null);
@@ -938,7 +1055,8 @@ function fmtEvent(ev) {
     case "mission": return h("div", { class: "ev assign" }, `Mission → ${d.to}`, pv(d.title));
     case "assign": return h("div", { class: "ev assign" }, `${who} → ${d.to}: order #${d.order_id}${d.round > 1 ? " (rework)" : ""}`,
       pv(d.fields && d.fields.objective ? d.fields.objective : d.preview));
-    case "report": return h("div", { class: "ev report" }, `${who} → ${d.to === "client" ? "you" : d.to}: report [${d.status}]`, pv(d.preview));
+    case "report": return h("div", { class: "ev report" }, `${who} → ${d.to === "client" ? "you" : d.to}: report [${d.status}]`,
+      d.status_line ? h("strong", {}, ` “${d.status_line}”`) : null, pv(d.preview));
     case "ask": return h("div", { class: "ev ask" }, `${who} asked ${d.to} (${KIND_NAME[d.kind] || d.kind})${d.cc && d.cc.length ? `, cc ${d.cc.join(", ")}` : ""}`, pv(`Q: ${d.preview}\nA: ${d.answer_preview}`));
     case "message": return h("div", { class: "ev message" }, `${who} → ${d.to}: message (${KIND_NAME[d.kind] || d.kind})${d.cc && d.cc.length ? `, cc ${d.cc.join(", ")}` : ""}`, pv(d.preview));
     case "wiki_write": return h("div", { class: "ev wiki" }, `${who} edited ${d.wiki} / ${d.page}${d.summary ? `: “${d.summary}”` : ""}`, pv(d.preview));
@@ -966,7 +1084,8 @@ async function startRun() {
     const mission = cfg.task === "__mission" && !S.customTask ? cfg.mission : null;
     const res = await api("/api/runs", { config: plain(S.config), task: mission ? null : cfg.task, mission, seed: cfg.seed, budget: cfg.budget, mock: cfg.mock, confirm_spend: cfg.confirm });
     S.runOrders = null;
-    S.run = { key: res.run, status: "running", states: {}, costs: {}, total_cost: 0, budget: cfg.budget, mock: cfg.mock, task: res.task, started: Date.now() / 1000, feed: [], next: 0 };
+    S.run = { key: res.run, status: "running", states: {}, costs: {}, total_cost: 0, budget: cfg.budget, mock: cfg.mock, task: res.task, started: Date.now() / 1000, feed: [], next: 0,
+      cpts: [], cnext: 0, lines: {}, calls: {}, now: 0 };
     S.collapsed.clear();
     renderAll();
     pollRun();
@@ -975,9 +1094,11 @@ async function startRun() {
 async function pollRun() {
   const r = S.run; if (!r) return;
   let st;
-  try { st = await api(`/api/runs/${r.key}?since=${r.next}`); } catch (e) { toast(e.message); return; }
+  try { st = await api(`/api/runs/${r.key}?since=${r.next}&csince=${r.cnext || 0}`); } catch (e) { toast(e.message); return; }
   if (S.run !== r) return;
-  Object.assign(r, { status: st.status, states: st.states, costs: st.costs, total_cost: st.total_cost, summary: st.summary, error: st.error, started: st.started, next: st.next, run_id: st.run_id });
+  Object.assign(r, { status: st.status, states: st.states, costs: st.costs, total_cost: st.total_cost, summary: st.summary, error: st.error, started: st.started, next: st.next, run_id: st.run_id,
+    lines: st.lines || {}, calls: st.calls || {}, now: st.now, cnext: st.cnext });
+  r.cpts = (r.cpts || []).concat(st.cost_points || []);
   const now = Date.now();
   for (const ev of st.events) {
     if (ev.type === "event") {
@@ -1139,6 +1260,7 @@ function renderOrders() {
     out.push(h("div", { class: "split" }, children.map((c) => h("div", { class: "split-item", onclick: () => { S.ex.sel = c.id; renderOrders(); } },
       h("div", {}, h("strong", {}, c.to), " ", rankBadge(c.to_role || "?"), c.round > 1 ? h("span", { class: "muted small" }, ` round ${c.round}`) : null,
         h("span", { class: "muted small" }, `  ${c.report ? c.report.status : "working…"}`)),
+      c.report && c.report.status_line ? h("div", { class: "small status-line" }, `“${c.report.status_line}”`) : null,
       h("div", { class: "small" }, trunc(orderHeadline(c), 220)),
       c.fields && c.fields.done_when ? h("div", { class: "small muted" }, "Done when: " + trunc(c.fields.done_when, 140)) : null))));
   } else if (!o.report) out.push(h("p", { class: "muted small" }, "Still working on it."));
@@ -1151,6 +1273,7 @@ function renderOrders() {
   }
   if (o.report) {
     out.push(h("h3", {}, o.id === 0 ? `Final report to you (${o.report.status})` : `Report back to ${o.from} (${o.report.status}, at ${o.report.t.toFixed(1)}s)`));
+    if (o.report.status_line) out.push(h("p", { class: "status-line" }, `“${o.report.status_line}”`));
     if (o.report.answer) out.push(h("p", {}, h("strong", {}, "Answer: "), o.report.answer));
     out.push(mdView(o.report.html));
   }

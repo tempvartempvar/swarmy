@@ -128,7 +128,8 @@ class MockProvider(Provider):
         if "run_tests" in tools and "run_tests" not in used:
             return ToolCall(cid, "run_tests", {})
         props = tools["submit"].parameters["properties"] if "submit" in tools else {}
-        args = {"report": f"[mock] placeholder report from {me} ({len(used)} tool calls)"}
+        args = {"report": f"[mock] placeholder report from {me} ({len(used)} tool calls)",
+                "status": "[mock] placeholder status"}
         if "answer" in props:
             args["answer"] = "[mock] unknown"
         return ToolCall(cid, "submit", args)

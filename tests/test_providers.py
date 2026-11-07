@@ -37,7 +37,7 @@ def test_anthropic_request_shape_and_cost(local_env, monkeypatch, tmp_path):
     task = make_task("qa", {"kind": "chain", "hops": 2}, 1)
     script = [
         anthropic_tool_call("search_docs", {"query": "manufacturer"}, model="claude-opus-5-5"),
-        anthropic_tool_call("submit", {"answer": task.gold()["expected"], "report": "found it"},
+        anthropic_tool_call("submit", {"answer": task.gold()["expected"], "report": "found it", "status": "Found it"},
                             model="claude-opus-5-5"),
     ]
     with anthropic_stub(script) as stub:
@@ -80,7 +80,7 @@ def test_openrouter_request_shape_retry_and_reported_cost(local_env, monkeypatch
     task = make_task("qa", {"kind": "chain", "hops": 2}, 2)
     script = [
         (429, json.dumps({"error": {"message": "rate limited, slow down"}}).encode()),
-        (200, openrouter_tool_call("submit", {"answer": task.gold()["expected"]}, cost=0.0003)),
+        (200, openrouter_tool_call("submit", {"answer": task.gold()["expected"], "status": "Answer found"}, cost=0.0003)),
     ]
     with openrouter_stub(script) as stub:
         async def no_sleep(_):
@@ -138,7 +138,7 @@ def test_custom_openai_endpoint_without_key(local_env, tmp_path):
     from swarmy.catalog import Endpoint, ModelSpec
 
     task = make_task("qa", {"kind": "chain", "hops": 2}, 3)
-    script = [(200, openrouter_tool_call("submit", {"answer": task.gold()["expected"]}, cost=None))]
+    script = [(200, openrouter_tool_call("submit", {"answer": task.gold()["expected"], "status": "Answer found"}, cost=None))]
     with openrouter_stub(script) as stub:
         catalog = Catalog.load(offline=True)
         catalog.endpoints["mybox"] = Endpoint(name="mybox", type="openai", base_url=stub.url + "/v1",
@@ -179,7 +179,7 @@ def test_anthropic_compatible_gateway(local_env, monkeypatch, tmp_path):
     monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
     monkeypatch.setenv("GATEWAY_KEY", "gw-secret")
     task = make_task("qa", {"kind": "chain", "hops": 2}, 1)
-    with anthropic_stub([anthropic_tool_call("submit", {"answer": task.gold()["expected"]})]) as stub:
+    with anthropic_stub([anthropic_tool_call("submit", {"answer": task.gold()["expected"], "status": "Answer found"})]) as stub:
         catalog = Catalog.load(offline=True)
         catalog.endpoints["gw"] = Endpoint(name="gw", type="anthropic", base_url=stub.url, api_key_env="GATEWAY_KEY",
                                            headers={"X-Team": "research"})
@@ -240,7 +240,7 @@ def test_preflight_passes_then_caches(local_env, monkeypatch, tmp_path):
     monkeypatch.setattr(providers, "_PREFLIGHT_OK", {})
     task = make_task("qa", {"kind": "chain", "hops": 2}, 1)
     script = [(200, openrouter_tool_call("noop", {})),
-              (200, openrouter_tool_call("submit", {"answer": task.gold()["expected"], "report": "done"}))]
+              (200, openrouter_tool_call("submit", {"answer": task.gold()["expected"], "report": "done", "status": "Done"}))]
     with openrouter_stub(script) as stub:
         catalog = Catalog.load(offline=True)
         catalog.endpoints["openrouter"].base_url = stub.url + "/api/v1"

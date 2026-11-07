@@ -110,7 +110,8 @@ class RunContext:
         if self.log:
             self.log.log(*describe_call(agent.name, agent.model.alias, turn, r, cost, max_tokens))
         if self.listener:
-            self.listener({"type": "call", "node": agent.name, "cost": cost, "purpose": purpose,
+            group = "top" if agent.parent is None else "officer" if agent.children else "soldier"
+            self.listener({"type": "call", "node": agent.name, "cost": cost, "purpose": purpose, "group": group,
                            "total_cost": self.budget.spent, "t": time.time()})
 
 
@@ -200,6 +201,7 @@ async def run_one(
             message = root_message(task) + "\n\n---\n\n" + message
     if submission is not None:
         ctx.event(root, "report", {"to": "client", "order_id": 0, "status": submission["status"],
+                                   "status_line": submission.get("status_line"),
                                    "text": submission["report"], "answer": submission.get("answer"),
                                    "chars": len(submission["report"]), "preview": submission["report"][:240],
                                    "checkins": checkins})

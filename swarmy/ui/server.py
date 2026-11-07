@@ -244,6 +244,7 @@ class UIState:
                 raise ValueError(f"missing API key for: {', '.join(missing)} (add it to .env and restart)")
         run_key = f"ui{int(time.time() * 1000)}"
         rec = {"key": run_key, "status": "running", "events": [], "states": {}, "costs": {}, "total_cost": 0.0,
+               "lines": {}, "calls": {}, "cost_points": [],
                "summary": None, "error": None, "org": org.name, "task": task.task_id, "mock": mock,
                "budget": budget, "started": time.time(), "run_id": None, "org_json": org.model_dump_json(),
                "family": task.family}
@@ -267,9 +268,15 @@ class UIState:
                     if st == "done" and ev["data"].get("status") not in (None, "submitted"):
                         st = ev["data"]["status"]  # turn_limit, error, refused...
                     rec["states"][ev["node"]] = st
+                    if ev["data"].get("line"):  # the five-word status from a finished order
+                        rec["lines"][ev["node"]] = ev["data"]["line"]
                 elif ev["type"] == "call":
                     rec["costs"][ev["node"]] = rec["costs"].get(ev["node"], 0.0) + ev["cost"]
+                    rec["calls"][ev["node"]] = rec["calls"].get(ev["node"], 0) + 1
                     rec["total_cost"] = ev["total_cost"]
+                    # cost over time for the live chart: [seconds since start, cost of this call, who paid]
+                    rec["cost_points"].append([round(ev["t"] - rec["started"], 2), round(ev["cost"], 7),
+                                               ev.get("group", "soldier")])
                 if ev["type"] != "call":
                     rec["events"].append(ev)
 
@@ -432,13 +439,16 @@ class UIState:
                 "truncated": p.stat().st_size > len(raw),
                 "html": to_html(text) if text and p.suffix.lower() in (".md", ".markdown") else None}
 
-    def run_state(self, key: str, since: int) -> dict:
+    def run_state(self, key: str, since: int, csince: int = 0) -> dict:
+        """A live run's state; events and cost points are sent incrementally (since / csince cursors)."""
         with self.lock:
             rec = self.runs.get(key)
             if rec is None:
                 raise KeyError(key)
-            return {**{k: v for k, v in rec.items() if k != "events"}, "events": rec["events"][since:],
-                    "next": len(rec["events"])}
+            return {**{k: v for k, v in rec.items() if k not in ("events", "cost_points")},
+                    "events": rec["events"][since:], "next": len(rec["events"]),
+                    "cost_points": rec["cost_points"][csince:], "cnext": len(rec["cost_points"]),
+                    "now": round(time.time() - rec["started"], 2)}
 
 
 def make_handler(state: UIState):
@@ -478,8 +488,9 @@ def make_handler(state: UIState):
                 if path.startswith("/api/orgs/"):
                     return self._json(state.load(path.rsplit("/", 1)[1]))
                 if path.startswith("/api/runs/"):
-                    since = int((parse_qs(url.query).get("since") or ["0"])[0])
-                    return self._json(state.run_state(path.rsplit("/", 1)[1], since))
+                    q = parse_qs(url.query)
+                    since, csince = int((q.get("since") or ["0"])[0]), int((q.get("csince") or ["0"])[0])
+                    return self._json(state.run_state(path.rsplit("/", 1)[1], since, csince))
                 if path == "/api/models":
                     return self._json(state.models_json())
                 if path == "/api/status":

@@ -30,6 +30,9 @@
   --k-skipdown: #6250d6;
   --k-other: #8a8983;
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.06), 0 2px 8px rgba(0, 0, 0, 0.04);
+  --series-1: #2a78d6;  /* cost chart: top position, officers, soldiers (validated, light) */
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
 }
 @media (prefers-color-scheme: dark) {
@@ -52,6 +55,9 @@
     --m-paid: #d95926;
     --m-free: #0ca30c;
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
   }
 }
 
@@ -331,3 +337,30 @@ pre.code { background: var(--card); border: 1px solid var(--line); border-radius
 .stale-banner { position: sticky; top: 0; z-index: 50; background: #fff3cd; color: #5c4400; border-bottom: 1px solid #e0c060; padding: 8px 16px; font-size: 13px; }
 .load-error { border: 1px solid var(--danger); color: var(--danger); border-radius: 8px; padding: 8px 10px; margin-bottom: 10px; font-size: 13px; }
 .end-reason { white-space: pre-line; }
+
+/* live cost chart */
+.cost-chart { position: relative; margin: 8px 0 4px; }
+.cost-head { font-size: 13px; margin-bottom: 4px; }
+.cost-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--text-2); margin-bottom: 2px; }
+.cost-legend .item { display: inline-flex; align-items: center; gap: 5px; }
+.cost-legend strong, .cost-tip strong { color: var(--text); font-variant-numeric: tabular-nums; }
+.cost-chart .key, .cost-tip .key { display: inline-block; width: 12px; height: 3px; border-radius: 2px; margin-right: 5px; vertical-align: middle; }
+.key.s1, .area.s1 { background: var(--series-1); fill: var(--series-1); }
+.key.s2, .area.s2 { background: var(--series-2); fill: var(--series-2); }
+.key.s3, .area.s3 { background: var(--series-3); fill: var(--series-3); }
+.cost-svg { width: 100%; height: auto; display: block; touch-action: none; }
+.cost-svg .area { stroke: var(--surface); stroke-width: 2; stroke-linejoin: round; }
+.cost-svg .grid { stroke: var(--line); stroke-width: 1; }
+.cost-svg .axis { stroke: var(--line-2); stroke-width: 1; }
+.cost-svg .tick { font-size: 10px; fill: var(--muted); font-variant-numeric: tabular-nums; }
+.cost-svg .end-val { font-size: 11.5px; font-weight: 600; fill: var(--text); font-variant-numeric: tabular-nums; }
+.cost-svg .budget { stroke: var(--text-2); stroke-width: 1; stroke-dasharray: 4 3; }
+.cost-svg .hair { stroke: var(--text-2); stroke-width: 1; }
+.cost-tip { position: absolute; top: 44px; background: var(--card); border: 1px solid var(--line-2); border-radius: 8px; padding: 6px 9px;
+  font-size: 12px; box-shadow: var(--shadow); pointer-events: none; min-width: 130px; color: var(--text-2); }
+.cost-tip .tt-h { color: var(--muted); margin-bottom: 2px; }
+.cost-table table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 4px; }
+.cost-table th, .cost-table td { text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.cost-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.node .line { font-size: 10.5px; font-style: italic; fill: var(--text); }
+.status-line { font-style: italic; color: var(--text); }

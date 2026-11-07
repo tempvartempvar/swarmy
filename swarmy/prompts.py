@@ -100,10 +100,12 @@ def system_prompt(agent: "Agent", ctx: "RunContext") -> str:
         lines.append("- Use your tools to do the work. Stay within your assignment.")
     if is_root:
         lines.append("- When the assignment is complete, call `submit` with the final answer"
-                     + (" in `answer`" if task.answer_required else "") + " and a short report.")
+                     + (" in `answer`" if task.answer_required else "") + ", a short report, and a `status` of at "
+                     "most five words for the org chart.")
     else:
         lines.append(f"- When finished, call `submit` with a concise report for {agent.parent.name}: what you did, the "
-                     "results or facts they need, and anything unresolved.")
+                     "results or facts they need, and anything unresolved; plus a `status` of at most five words "
+                     "for the org chart (e.g. 'Pump specs verified and recorded').")
 
     lines += ["", "## Environment"]
     if task.has_workspace:
