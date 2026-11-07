@@ -961,75 +961,114 @@ function niceStep(range, n) {
 const fmtSecs = (t) => (t < 60 ? `${Math.round(t)}s` : t < 3600 ? `${+(t / 60).toFixed(1)}m` : `${+(t / 3600).toFixed(1)}h`);
 const TIME_STEPS = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1200, 1800, 3600, 7200, 14400];
 const timeStep = (end) => TIME_STEPS.find((st) => end / st <= 5) || 14400;
-const fmtUsd = (v, step) => "$" + v.toFixed(step >= 0.1 ? 2 : step >= 0.01 ? 2 : step >= 0.001 ? 3 : 4);
-function costSeries(r) {
-  const acc = { top: 0, officer: 0, soldier: 0 }, rows = [{ t: 0, ...acc }];
-  for (const [t, c, g] of r.cpts || []) { acc[g] = (acc[g] || 0) + c; rows.push({ t, ...acc }); }
+const fmtUsd = (v, step) => "$" + v.toFixed(step >= 0.01 ? 2 : step >= 0.001 ? 3 : 4);
+const fmtTok = (v) => (v < 1000 ? String(Math.round(v)) : v < 1e6 ? `${+(v / 1000).toFixed(v < 1e4 ? 1 : 0)}k` : `${+(v / 1e6).toFixed(2)}M`);
+const pct = (part, whole) => (whole > 0 ? `${Math.round((100 * part) / whole)}%` : "–");
+// Each live-chart point is [seconds since start, cost, group, tokens in, tokens out] for one model call.
+const METRICS = {
+  cost: { title: "Cost", value: (p) => p[1], fmt: money, tick: fmtUsd, min: 0.0005 },
+  out: { title: "Work (output tokens)", value: (p) => p[4] || 0, fmt: fmtTok, tick: (v) => fmtTok(v), min: 50,
+    hint: "text the models generated, including reasoning" },
+  in: { title: "Input tokens", value: (p) => p[3] || 0, fmt: fmtTok },
+  calls: { title: "Calls", value: () => 1, fmt: (v) => String(Math.round(v)) },
+};
+function runEnd(r, lastT) {
   const running = r.status === "running";
-  const end = Math.max(running ? r.now || 0 : (r.summary ? Number(r.summary.wall_s) : r.now || 0), rows[rows.length - 1].t, 1);
+  return Math.max(running ? r.now || 0 : (r.summary ? Number(r.summary.wall_s) : r.now || 0), lastT, 1);
+}
+function metricSeries(r, metric) {
+  const val = METRICS[metric].value, acc = { top: 0, officer: 0, soldier: 0 }, rows = [{ t: 0, ...acc }];
+  for (const p of r.cpts || []) { acc[p[2]] = (acc[p[2]] || 0) + val(p); rows.push({ t: p[0], ...acc }); }
+  const end = runEnd(r, rows[rows.length - 1].t);
   rows.push({ t: end, ...acc });  // hold the last value to now
   return { rows, acc, end };
 }
-function costChart(r) {
-  const { rows, acc, end } = costSeries(r);
+const groupSlot = (g) => COST_GROUPS.findIndex(([k]) => k === g) + 1;
+function presentGroups(r) {
+  const seen = new Set((r.cpts || []).map((p) => p[2]));
+  return COST_GROUPS.filter(([g]) => seen.has(g) || Object.values(S.idx).some((e) => costGroupOf(e) === g));
+}
+// One stacked step-area chart of a cumulative metric. Charts drawn together share the time axis and the
+// crosshair: hovering one shows the readout on every chart.
+function stackChart(r, metric, present, hovers) {
+  const M = METRICS[metric], { rows, acc, end } = metricSeries(r, metric);
   const total = acc.top + acc.officer + acc.soldier;
-  const present = COST_GROUPS.filter(([g]) => acc[g] > 0 || Object.values(S.idx).some((e) => costGroupOf(e) === g));
-  const VW = 420, VH = 180, m = { l: 46, r: 76, t: 10, b: 22 }, pw = VW - m.l - m.r, ph = VH - m.t - m.b;
-  let yMax = Math.max(total * 1.15, 0.0005);
-  const budget = Number(r.budget) || 0, showBudget = budget > 0 && total >= budget * 0.5;  // only once it matters
+  const VW = 420, VH = 150, m = { l: 46, r: 76, t: 8, b: 20 }, pw = VW - m.l - m.r, ph = VH - m.t - m.b;
+  let yMax = Math.max(total * 1.15, M.min);
+  const budget = metric === "cost" ? Number(r.budget) || 0 : 0, showBudget = budget > 0 && total >= budget * 0.5;
   if (showBudget) yMax = Math.max(yMax, budget * 1.06);
   const step = niceStep(yMax, 3); yMax = Math.ceil(yMax / step) * step;
   const x = (t) => m.l + (t / end) * pw, y = (v) => m.t + ph - (v / yMax) * ph;
   const svg = s("svg", { viewBox: `0 0 ${VW} ${VH}`, class: "cost-svg", role: "img",
-    "aria-label": `Cumulative cost over time: ${money(total)} after ${fmtSecs(end)}` });
+    "aria-label": `${M.title} over time, cumulative: ${M.fmt(total)} after ${fmtSecs(end)}` });
   for (let v = 0; v <= yMax + 1e-12; v += step) {  // recessive grid + y labels
     svg.append(s("line", { class: "grid", x1: m.l, x2: m.l + pw, y1: y(v), y2: y(v) }));
-    svg.append(s("text", { class: "tick", x: m.l - 6, y: y(v) + 3.5, "text-anchor": "end" }, fmtUsd(v, step)));
+    svg.append(s("text", { class: "tick", x: m.l - 6, y: y(v) + 3.5, "text-anchor": "end" }, M.tick(v, step)));
   }
   const xstep = timeStep(end);
-  for (let t = 0; t <= end + 1e-9; t += xstep) svg.append(s("text", { class: "tick", x: x(t), y: VH - 6, "text-anchor": "middle" }, fmtSecs(t)));
+  for (let t = 0; t <= end + 1e-9; t += xstep) svg.append(s("text", { class: "tick", x: x(t), y: VH - 5, "text-anchor": "middle" }, fmtSecs(t)));
   // stacked step areas, bottom to top: top position, officers, soldiers
   const thin = rows.length > 600 ? rows.filter((_, i) => i % Math.ceil(rows.length / 600) === 0 || i === rows.length - 1) : rows;
   let base = thin.map(() => 0);
-  COST_GROUPS.forEach(([g], i) => {
-    if (!present.some(([p]) => p === g)) return;
+  for (const [g] of present) {
     const upper = thin.map((row, k) => base[k] + row[g]);
     let d = `M${x(thin[0].t)},${y(upper[0])}`;
     for (let k = 1; k < thin.length; k++) d += `H${x(thin[k].t)}V${y(upper[k])}`;
     for (let k = thin.length - 1; k > 0; k--) d += `V${y(base[k])}H${x(thin[k - 1].t)}`;
     d += `V${y(base[0])}Z`;
-    svg.append(s("path", { d, class: `area s${i + 1}` }));
+    svg.append(s("path", { d, class: `area s${groupSlot(g)}` }));
     base = upper;
-  });
+  }
   svg.append(s("line", { class: "axis", x1: m.l, x2: m.l + pw, y1: y(0), y2: y(0) }));
   if (showBudget) {
     svg.append(s("line", { class: "budget", x1: m.l, x2: m.l + pw, y1: y(budget), y2: y(budget) }));
     svg.append(s("text", { class: "tick", x: m.l + pw + 6, y: y(budget) + 3.5 }, `budget $${budget.toFixed(2)}`));
   }
-  svg.append(s("text", { class: "end-val", x: m.l + pw + 6, y: Math.min(y(total) + 4, m.t + ph - 2) }, money(total)));
-  // crosshair + tooltip (one readout, every series), kept across re-renders
-  const wrapEl = h("div", { class: "cost-chart" });
+  svg.append(s("text", { class: "end-val", x: m.l + pw + 6, y: Math.min(y(total) + 4, m.t + ph - 2) }, M.fmt(total)));
   const hair = s("line", { class: "hair", y1: m.t, y2: m.t + ph, visibility: "hidden" });
   svg.append(hair);
-  const tip = h("div", { class: "cost-tip", hidden: true });
-  const show = (fx) => {
-    const t = Math.max(0, Math.min(end, ((fx * VW) - m.l) / pw * end));
-    let lo = 0, hi = rows.length - 1;  // last row at or before t
-    while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (rows[mid].t <= t) lo = mid; else hi = mid - 1; }
-    const row = rows[lo], tot = row.top + row.officer + row.soldier;
-    hair.setAttribute("x1", x(t)); hair.setAttribute("x2", x(t)); hair.setAttribute("visibility", "visible");
-    tip.replaceChildren(h("div", { class: "tt-h" }, `at ${fmtSecs(t)}`), h("div", { class: "tt-row" }, h("strong", {}, money(tot)), " total"),
-      ...present.slice().reverse().map(([g, label]) => h("div", { class: "tt-row" }, h("span", { class: `key s${COST_GROUPS.findIndex(([k]) => k === g) + 1}` }), h("strong", {}, money(row[g])), ` ${label}`)));
-    tip.hidden = false;
-    tip.style.left = `${Math.min(fx * 100, 62)}%`;
-  };
-  svg.addEventListener("pointermove", (e) => { const b = svg.getBoundingClientRect(); S.costHover = (e.clientX - b.left) / b.width; show(S.costHover); });
-  svg.addEventListener("pointerleave", () => { S.costHover = null; hair.setAttribute("visibility", "hidden"); tip.hidden = true; });
-  if (S.costHover != null) requestAnimationFrame(() => show(S.costHover));
+  const tip = h("div", { class: "cost-tip", hidden: true }), box = h("div", { class: "cost-chart" });
+  hovers.push({
+    show(fx) {
+      const t = Math.max(0, Math.min(end, ((fx * VW) - m.l) / pw * end));
+      let lo = 0, hi = rows.length - 1;  // last row at or before t
+      while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (rows[mid].t <= t) lo = mid; else hi = mid - 1; }
+      const row = rows[lo], tot = row.top + row.officer + row.soldier;
+      hair.setAttribute("x1", x(t)); hair.setAttribute("x2", x(t)); hair.setAttribute("visibility", "visible");
+      tip.replaceChildren(h("div", { class: "tt-h" }, `${M.title} at ${fmtSecs(t)}`), h("div", { class: "tt-row" }, h("strong", {}, M.fmt(tot)), " total"),
+        ...present.slice().reverse().map(([g, label]) => h("div", { class: "tt-row" }, h("span", { class: `key s${groupSlot(g)}` }), h("strong", {}, M.fmt(row[g])), ` ${label}`)));
+      tip.hidden = false;
+      tip.style.left = `${Math.min(fx * 100, 62)}%`;
+      // inside its own plot, clear of the legend (SVG elements have no offsetTop, so measure)
+      tip.style.top = `${svg.getBoundingClientRect().top - box.getBoundingClientRect().top + 4}px`;
+    },
+    hide() { hair.setAttribute("visibility", "hidden"); tip.hidden = true; },
+  });
+  svg.addEventListener("pointermove", (e) => { const b = svg.getBoundingClientRect(); S.costHover = (e.clientX - b.left) / b.width; hovers.forEach((hv) => hv.show(S.costHover)); });
+  svg.addEventListener("pointerleave", () => { S.costHover = null; hovers.forEach((hv) => hv.hide()); });
   const legend = h("div", { class: "cost-legend" }, present.map(([g, label]) => h("span", { class: "item" },
-    h("span", { class: `key s${COST_GROUPS.findIndex(([k]) => k === g) + 1}` }), `${label} `, h("strong", {}, money(acc[g])))));
-  wrapEl.append(h("div", { class: "cost-head" }, h("strong", {}, "Cost so far"), h("span", { class: "muted small" }, ` ${money(total)} of $${budget.toFixed(2)} budget`)), legend, svg, tip);
-  return wrapEl;
+    h("span", { class: `key s${groupSlot(g)}` }), `${label} `, h("strong", {}, M.fmt(acc[g])), h("span", { class: "muted" }, ` ${pct(acc[g], total)}`))));
+  const head = metric === "cost"
+    ? h("div", { class: "cost-head" }, h("strong", {}, "Cost"), h("span", { class: "muted small" }, ` ${money(total)} of $${budget.toFixed(2)} budget`))
+    : h("div", { class: "cost-head" }, h("strong", {}, M.title), h("span", { class: "muted small" }, ` ${M.fmt(total)}${M.hint ? " · " + M.hint : ""}`));
+  box.append(head, legend, svg, tip);
+  return box;
+}
+// Cost and work side by side in time (two charts, one axis each), and who does what.
+function costChart(r) {
+  const present = presentGroups(r), hovers = [];
+  const wrap = h("div", { class: "cost-charts" }, stackChart(r, "cost", present, hovers), stackChart(r, "out", present, hovers), shareTable(r, present));
+  if (S.costHover != null) requestAnimationFrame(() => hovers.forEach((hv) => hv.show(S.costHover)));
+  return wrap;
+}
+function shareTable(r, present) {
+  const cols = ["cost", "out", "in", "calls"];
+  const sums = Object.fromEntries(cols.map((k) => [k, metricSeries(r, k).acc]));
+  const totals = Object.fromEntries(cols.map((k) => [k, Object.values(sums[k]).reduce((a, b) => a + b, 0)]));
+  return h("table", { class: "share-table" },
+    h("tr", {}, h("th", {}, "Share of"), ...cols.map((k) => h("th", { class: "num" }, k === "out" ? "Work (out)" : k === "in" ? "Tokens in" : METRICS[k].title))),
+    present.map(([g, label]) => h("tr", {}, h("td", {}, h("span", { class: `key s${groupSlot(g)}` }), label),
+      ...cols.map((k) => h("td", { class: "num", title: METRICS[k].fmt(sums[k][g]) }, pct(sums[k][g], totals[k]))))));
 }
 function costGroupOf(e) {
   return !e || !e.node ? null : e.parent == null ? "top" : (e.node.children && e.node.children.length) ? "officer" : "soldier";
@@ -1037,15 +1076,17 @@ function costGroupOf(e) {
 function costTable(r) {
   const names = Object.keys({ ...r.costs, ...r.lines });
   if (!names.length) return h("div");
+  const tok = r.tokens || {};
   const rows = names.map((name) => {
     const id = S.nameToId[name], n = id != null ? info(id).node : null;
-    return { name, role: n ? n.role : "", model: n ? n.model : "", calls: (r.calls || {})[name] || 0, cost: r.costs[name] || 0, line: r.lines[name] || "" };
+    return { name, role: n ? n.role : "", model: n ? n.model : "", calls: (r.calls || {})[name] || 0, cost: r.costs[name] || 0,
+      tin: (tok[name] || [0, 0])[0], tout: (tok[name] || [0, 0])[1], line: r.lines[name] || "" };
   }).sort((a, b) => b.cost - a.cost);
   return h("details", { class: "cost-table", open: S.costTableOpen || null, ontoggle: (e) => (S.costTableOpen = e.target.open) },
-    h("summary", { class: "small" }, `Cost and status by position (${rows.length})`),
-    h("table", {}, h("tr", {}, ["Position", "Model", "Calls", "Cost", "Last status"].map((c) => h("th", {}, c))),
+    h("summary", { class: "small" }, `Cost, work and status by position (${rows.length})`),
+    h("table", {}, h("tr", {}, ["Position", "Model", "Calls", "Tokens in", "Work (out)", "Cost", "Last status"].map((c, i) => h("th", { class: i >= 2 && i <= 5 ? "num" : "" }, c))),
       rows.map((x) => h("tr", {}, h("td", {}, x.name, " ", x.role ? rankBadge(x.role) : null), h("td", {}, x.model), h("td", { class: "num" }, String(x.calls)),
-        h("td", { class: "num" }, money(x.cost)), h("td", {}, x.line)))));
+        h("td", { class: "num" }, fmtTok(x.tin)), h("td", { class: "num" }, fmtTok(x.tout)), h("td", { class: "num" }, money(x.cost)), h("td", {}, x.line)))));
 }
 
 function fmtEvent(ev) {
@@ -1085,7 +1126,7 @@ async function startRun() {
     const res = await api("/api/runs", { config: plain(S.config), task: mission ? null : cfg.task, mission, seed: cfg.seed, budget: cfg.budget, mock: cfg.mock, confirm_spend: cfg.confirm });
     S.runOrders = null;
     S.run = { key: res.run, status: "running", states: {}, costs: {}, total_cost: 0, budget: cfg.budget, mock: cfg.mock, task: res.task, started: Date.now() / 1000, feed: [], next: 0,
-      cpts: [], cnext: 0, lines: {}, calls: {}, now: 0 };
+      cpts: [], cnext: 0, lines: {}, calls: {}, tokens: {}, now: 0 };
     S.collapsed.clear();
     renderAll();
     pollRun();
@@ -1097,7 +1138,7 @@ async function pollRun() {
   try { st = await api(`/api/runs/${r.key}?since=${r.next}&csince=${r.cnext || 0}`); } catch (e) { toast(e.message); return; }
   if (S.run !== r) return;
   Object.assign(r, { status: st.status, states: st.states, costs: st.costs, total_cost: st.total_cost, summary: st.summary, error: st.error, started: st.started, next: st.next, run_id: st.run_id,
-    lines: st.lines || {}, calls: st.calls || {}, now: st.now, cnext: st.cnext });
+    lines: st.lines || {}, calls: st.calls || {}, tokens: st.tokens || {}, now: st.now, cnext: st.cnext });
   r.cpts = (r.cpts || []).concat(st.cost_points || []);
   const now = Date.now();
   for (const ev of st.events) {

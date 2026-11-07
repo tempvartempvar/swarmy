@@ -244,7 +244,7 @@ class UIState:
                 raise ValueError(f"missing API key for: {', '.join(missing)} (add it to .env and restart)")
         run_key = f"ui{int(time.time() * 1000)}"
         rec = {"key": run_key, "status": "running", "events": [], "states": {}, "costs": {}, "total_cost": 0.0,
-               "lines": {}, "calls": {}, "cost_points": [],
+               "lines": {}, "calls": {}, "tokens": {}, "cost_points": [],
                "summary": None, "error": None, "org": org.name, "task": task.task_id, "mock": mock,
                "budget": budget, "started": time.time(), "run_id": None, "org_json": org.model_dump_json(),
                "family": task.family}
@@ -274,9 +274,13 @@ class UIState:
                     rec["costs"][ev["node"]] = rec["costs"].get(ev["node"], 0.0) + ev["cost"]
                     rec["calls"][ev["node"]] = rec["calls"].get(ev["node"], 0) + 1
                     rec["total_cost"] = ev["total_cost"]
-                    # cost over time for the live chart: [seconds since start, cost of this call, who paid]
+                    tin, tout = ev.get("tokens_in", 0), ev.get("tokens_out", 0)
+                    tok = rec["tokens"].setdefault(ev["node"], [0, 0])
+                    tok[0] += tin
+                    tok[1] += tout
+                    # for the live chart: [seconds since start, cost, group, tokens in, tokens out] per call
                     rec["cost_points"].append([round(ev["t"] - rec["started"], 2), round(ev["cost"], 7),
-                                               ev.get("group", "soldier")])
+                                               ev.get("group", "soldier"), tin, tout])
                 if ev["type"] != "call":
                     rec["events"].append(ev)
 

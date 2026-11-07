@@ -112,7 +112,10 @@ class RunContext:
         if self.listener:
             group = "top" if agent.parent is None else "officer" if agent.children else "soldier"
             self.listener({"type": "call", "node": agent.name, "cost": cost, "purpose": purpose, "group": group,
-                           "total_cost": self.budget.spent, "t": time.time()})
+                           "total_cost": self.budget.spent, "t": time.time(),
+                           # tokens read (incl. cached) and generated (incl. reasoning) by this call
+                           "tokens_in": u.input_tokens + u.cache_read_tokens + u.cache_write_tokens,
+                           "tokens_out": u.output_tokens})
 
 
 async def run_one(

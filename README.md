@@ -165,10 +165,15 @@ swarmy ui [--port 8765] [--orgs-dir configs/orgs]
   and watch it live. Agents light up while they think, wait or answer; orders and reports flash along
   the edges; messages arc between cards; and an activity feed shows orders, reports, questions with
   their answers, and wiki edits as they happen.
-  - A **live cost chart** shows cumulative spend over time, stacked into the top position, the other
-    officers and the soldiers, so the top edge is the total. Hover it for the split at any moment.
-    Spending is shown against the budget, and a dashed budget line appears once spending passes half
-    of it. Below the chart, a table lists each position's model, calls, cost and last status.
+  - **Live cost and work charts.** Two charts share one time axis and the same split into the top
+    position, the other officers and the soldiers (the top edge is the total):
+    - **cost**, against the budget, with a dashed budget line once spending passes half of it;
+    - **work**, measured in output tokens: what the models generated, including reasoning.
+
+    Hovering either chart shows the split at that moment on both. A small table compares each
+    group's share of cost, work, input tokens and calls, which shows whether a group is expensive
+    because it does the work, or because it re-reads long contexts on pricier models. A table below
+    lists each position's model, calls, tokens in and out, cost and last status.
   - **Status updates.** Every agent finishing an order gives a status of at most five words
     ("Pump specs verified and recorded"). Each card shows its position's latest status during the
     run, in place of the model badge (a checkbox switches back). Statuses also appear in the feed,

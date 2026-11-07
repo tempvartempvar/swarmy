@@ -104,6 +104,9 @@ def test_mock_run_with_live_state(server):
     pts = st["cost_points"]
     assert len(pts) == st["summary"]["n_calls"] == st["cnext"] and {p[2] for p in pts} <= {"top", "officer", "soldier"}
     assert all(b[0] >= a[0] for a, b in zip(pts, pts[1:])) and sum(st["calls"].values()) == len(pts)
+    # ...with tokens read and generated, for the work chart; per-position totals match the points
+    assert all(len(p) == 5 and p[3] > 0 and p[4] > 0 for p in pts)
+    assert sum(t[1] for t in st["tokens"].values()) == sum(p[4] for p in pts)
     assert st["lines"] and all(len(v.split()) <= 5 for v in st["lines"].values())
     _, later = call(f"/api/runs/{started['run']}?since={st['next']}&csince={st['cnext']}")
     assert later["cost_points"] == [] and later["events"] == []
