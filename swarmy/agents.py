@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
@@ -37,6 +38,10 @@ class Agent:
         self.wiki_writes = 0  # wiki edits during the current assignment
         self.reminded = False
         self.status_warned = False  # told once per order to give a short status
+        self.outstanding: dict[int, dict] = {}  # order id -> {"to", "task"} for orders still being worked on
+        self.arrived: list[dict] = []  # reports back from subordinates, not yet shown to this agent
+        self.report_signal = asyncio.Event()  # set whenever a report arrives
+        self.failure: BaseException | None = None  # a run-stopping error raised under one of its orders
         self.turns = 0  # model calls during the current assignment
 
     def max_turns(self, org: OrgConfig) -> int:
@@ -50,10 +55,46 @@ class Agent:
             yield from c.walk()
 
     def _deliver_inbox(self, ctx: "RunContext") -> None:
+        self.raise_failure()
         pending = ctx.inboxes.pop(self.name, [])
         if pending:
             self.conv.add_user("Messages received:\n" + "\n\n".join(pending))
             ctx.event(self, "inbox", {"count": len(pending)})
+        if self.arrived:  # reports that came back while this agent was busy
+            reps, self.arrived = self.arrived, []
+            self.conv.add_user("Reports received:\n\n" + "\n\n".join(r["text"] for r in reps) + self.outstanding_note())
+
+    # ---- orders out ----
+    def raise_failure(self) -> None:
+        if self.failure is not None:
+            raise self.failure
+
+    def outstanding_list(self) -> str:
+        return ", ".join(f"#{oid} ({o['to']})" for oid, o in self.outstanding.items())
+
+    def outstanding_note(self) -> str:
+        if not self.outstanding:
+            return "\n\nAll your orders have reported back." if self.children else ""
+        return f"\n\nStill out: {self.outstanding_list()}."
+
+    async def wait_for(self, done) -> None:
+        """Sleep until done() is true, waking whenever a report arrives."""
+        while not done():
+            self.report_signal.clear()
+            await self.report_signal.wait()
+            self.raise_failure()
+
+    def _cancel_outstanding(self) -> None:
+        for o in self.outstanding.values():
+            o["task"].cancel()
+
+    async def _collect_late(self) -> str:
+        """Orders still out when this agent stops: let them finish and pass their reports up."""
+        await self.wait_for(lambda: not self.outstanding)
+        reps, self.arrived = self.arrived, []
+        if not reps:
+            return ""
+        return "\n\nReports from my subordinates that came back after I stopped:\n\n" + "\n\n".join(r["text"] for r in reps)
 
     async def handle(self, text: str, ctx: "RunContext", order_id: int | None = None) -> dict:
         """Work on one assignment until `submit` (or a limit). Returns {report, answer, status}."""
@@ -67,8 +108,12 @@ class Agent:
         t0 = time.monotonic()
         try:
             result = await self._handle(text, ctx)
+        except asyncio.CancelledError:
+            self._cancel_outstanding()
+            raise
         except Exception as e:
             if stops_run(e):
+                self._cancel_outstanding()
                 raise
             # A bug or unexpected response: report it to the commander instead of ending the whole run.
             tb = "".join(traceback.format_exception(e))
@@ -78,6 +123,8 @@ class Agent:
                       "answer": None, "status": "error"}
         finally:
             ctx.active.discard(self.name)
+        if self.outstanding or self.arrived:
+            result["report"] = str(result["report"]) + await self._collect_late()
         result.setdefault("status_line", STATUS_FALLBACK.get(result["status"], result["status"]))
         ctx.event(self, "agent_done", {"order_id": order_id, "status": result["status"], "turns": self.turns,
                                        "seconds": round(time.monotonic() - t0, 2), "status_line": result["status_line"]})
@@ -163,9 +210,16 @@ class Agent:
                     nudges += 1
                     force_tool = True
                     ctx.event(self, "nudge", {"stop": result.stop_reason})
-                    self.conv.add_user(NUDGE if salvaged is None else
-                                       f"Your submission was written as text, so it was not delivered: {problem} "
-                                       "Call the `submit` tool itself (a tool call, not text).")
+                    if salvaged is not None:
+                        note = (f"Your submission was written as text, so it was not delivered: {problem} "
+                                "Call the `submit` tool itself (a tool call, not text).")
+                    elif result.stop_reason == "max_tokens":
+                        note = (f"Your reply hit the output limit ({max_tokens} tokens) before you called a tool, so "
+                                "nothing happened. Keep your reasoning short and act now: call one tool. Write long "
+                                "content to files in parts if needed.")
+                    else:
+                        note = NUDGE
+                    self.conv.add_user(note)
                     continue
                 ctx.event(self, "gave_up", {"nudges": nudges, "stop": result.stop_reason})
                 return {"report": last_text or "[no report]", "answer": None, "status": "no_submit"}
@@ -207,6 +261,9 @@ class Agent:
     def _submit_problem(self, args: dict, ctx: "RunContext") -> str | None:
         """Why a submit can't be accepted yet (None if it can): bad arguments, the status rule, or the
         one-time reminder to record findings on a wiki first."""
+        if self.outstanding:
+            return (f"Submission rejected: some of your orders are still out ({self.outstanding_list()}). "
+                    "Call `wait` to collect their reports first.")
         problem = validate_args(self.specs["submit"], {**args, "status": "x"}) or self._status_problem(args)
         if problem:
             return f"Submission rejected: {problem}"

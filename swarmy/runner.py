@@ -51,6 +51,7 @@ class RunContext:
     delegate_rounds: Counter = field(default_factory=Counter)
     totals: Counter = field(default_factory=Counter)
     per_node: dict = field(default_factory=lambda: defaultdict(Counter))
+    order_tasks: set = field(default_factory=set)  # every order running in the background
     _contacts: dict = field(default_factory=dict)
     _orders: int = 0
 
@@ -212,6 +213,11 @@ async def run_one(
             status = submission["status"]
             if status == "error":
                 error = submission["report"]
+    leftover = [t for t in ctx.order_tasks if not t.done()]  # e.g. after a timeout or an endpoint refusal
+    for t in leftover:
+        t.cancel()
+    if leftover:
+        await asyncio.gather(*leftover, return_exceptions=True)
     wall = time.monotonic() - t0
     crashes = len(ctx.tracer.query("SELECT 1 FROM events WHERE run_id=? AND kind='crash'", (run_id,)))
     end_reason = explain_end(status, error, root.name, submission["status"] if submission else None, checkins,

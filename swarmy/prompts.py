@@ -89,10 +89,21 @@ def system_prompt(agent: "Agent", ctx: "RunContext") -> str:
             "names, numbers, interfaces and file paths they need, and nothing they don't. Put facts several people "
             "need on a wiki page once and point to it.",
             "- Split the work to fit your forces: give larger or harder parts to subordinates with bigger commands "
-            "or stronger models, and let them proceed in parallel without overlapping. Put several assignments in "
-            "one `delegate` call; they run at the same time and you get all reports back together.",
-            "- Check what comes back. If something is missing, inconsistent or wrong, delegate follow-up work.",
+            "or stronger models, and let them proceed in parallel without overlapping.",
+            "- Start everyone who can start now, in one `delegate` call. Don't hold a unit back until another one "
+            "finishes: if it needs someone else's results, have it begin with what it can do already (reading the "
+            "spec, scaffolding, test cases) and tell it which wiki page or file the inputs will appear in.",
         ]
+        if org.orders.blocking:
+            lines.append("- `delegate` returns when every subordinate in the call has reported back; all their reports "
+                         "come back together.")
+        else:
+            lines.append("- `delegate` returns at once: your orders are worked on in the background while you keep "
+                         "working. Reports arrive as each subordinate finishes, shown at the start of your next turn, "
+                         "or call `wait` to wait for them. While orders are out you can check files, update the wiki, "
+                         "answer questions, or give orders to subordinates who are free. You can't submit until "
+                         "every report is back.")
+        lines.append("- Check what comes back. If something is missing, inconsistent or wrong, delegate follow-up work.")
         if lvl.review_tools and task.has_workspace:
             lines.append("- You can inspect the shared workspace (list_files, read_file"
                          + (", run_tests" if task.has_public_tests else "") + ") to verify work.")

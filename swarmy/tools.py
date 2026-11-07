@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import time
 import traceback
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -41,6 +42,7 @@ STATUS_FIELD = {"type": "string", "description": f"a status update of at most {S
                 "chart (e.g. 'Simulator matches all sample cases')"}
 STATUS_FALLBACK = {"turn_limit": "Ran out of turns", "no_submit": "Stopped without submitting",
                    "error": "Stopped by an error", "refused": "Declined the order"}
+LIMIT_GRACE = 1.1  # order fields and orders may run 10% over their limits before they are rejected
 FORWARD_LIMIT = 300  # verbatim characters of your own orders an order or wiki edit may repeat
 
 
@@ -93,13 +95,22 @@ def tool_specs(agent: "Agent", ctx: "RunContext") -> list[ToolSpec]:
                         ["to", "task"])
             how = "Each order must be self-contained."
         forward = " Orders that repeat your own orders verbatim are rejected." if rules.no_forwarding else ""
+        when = ("All orders in one call run in parallel; the tool returns when every subordinate has reported back."
+                if rules.blocking else
+                "Orders run in the background and the tool returns at once, so you can keep working; reports arrive "
+                "as subordinates finish (at the start of your next turn, or call `wait`). A subordinate takes one "
+                "order at a time.")
         specs.append(ToolSpec(
             "delegate",
-            "Give orders to one or more of your direct subordinates. All orders in one call run in parallel; the "
-            f"tool returns when every subordinate has reported back. The subordinate sees only what you write. {how}"
-            f" Keep each order under {rules.max_chars} characters.{forward}",
+            f"Give orders to one or more of your direct subordinates. {when} The subordinate sees only what you "
+            f"write. {how} Keep each order under {rules.max_chars} characters.{forward}",
             _obj({"assignments": {"type": "array", "items": item}}, ["assignments"]),
         ))
+        if not rules.blocking:
+            specs.append(ToolSpec(
+                "wait", "Wait for reports from your subordinates and return them. for='any' (default) returns as soon "
+                "as at least one report is in; for='all' waits until every order you have out has reported back.",
+                _obj({"for": {"type": "string", "enum": ["any", "all"]}}, [])))
     if task.has_workspace and (hands_on or review):
         specs.append(ToolSpec("list_files", "List files in the shared workspace.", _obj({}, [])))
         specs.append(ToolSpec("read_file", "Read a text file from the shared workspace.",
@@ -239,14 +250,14 @@ class Toolbox:
             if missing:
                 raise ToolError(f"missing {', '.join(missing)}")
             for k, _, _, limit, _ in ORDER_FIELDS:
-                if len(fields[k]) > limit:
+                if len(fields[k]) > limit * LIMIT_GRACE:
                     raise ToolError(f"{k} is {len(fields[k])} characters; keep it under {limit}. Distill it.")
             text = render_order(fields)
         else:
             text, fields = str(a.get("task") or "").strip(), {}
             if not text:
                 raise ToolError("empty task")
-        if len(text) > rules.max_chars:
+        if len(text) > rules.max_chars * LIMIT_GRACE:
             raise ToolError(f"order is {len(text)} characters; the limit is {rules.max_chars}. Give only what this "
                             "subordinate needs; put shared facts on a wiki page and point to it.")
         if rules.no_forwarding:
@@ -274,6 +285,10 @@ class Toolbox:
             if to in jobs:
                 problems.append(f"only one order per subordinate per call ({to} got two; the first was kept)")
                 continue
+            busy = next((oid for oid, o in agent.outstanding.items() if o["to"] == to), None)
+            if busy is not None:
+                problems.append(f"{to} is still working on order #{busy}; wait for its report before giving it another")
+                continue
             try:
                 jobs[to], job_fields[to] = self._order_from(agent, a)
             except ToolError as e:
@@ -297,26 +312,67 @@ class Toolbox:
                 "fields": job_fields.get(to) or None,
             })
 
-        ctx.live(agent, "waiting", {"on": list(jobs)})
-        async with asyncio.TaskGroup() as tg:
-            futures = {to: tg.create_task(by_name[to].handle(assignment_message(agent, text), ctx,
-                                                             order_id=order_ids[to]))
-                       for to, text in jobs.items()}
-        ctx.live(agent, "working", {})
+        # every order runs as its own task; its report comes back to this commander when it finishes
+        for to, text in jobs.items():
+            oid = order_ids[to]
+            task = asyncio.create_task(self._run_order(agent, by_name[to], text, oid), name=f"order-{oid}")
+            agent.outstanding[oid] = {"to": to, "task": task}
+            ctx.order_tasks.add(task)
+        notes = [f"Note: {p}. Fix and resend that order if it is still needed." for p in problems]
+        if ctx.org.orders.blocking:
+            ctx.live(agent, "waiting", {"on": list(jobs)})
+            await agent.wait_for(lambda: not agent.outstanding)
+            ctx.live(agent, "working", {})
+            reps, agent.arrived = agent.arrived, []
+            return "\n\n".join(notes + [r["text"] for r in reps])
+        sent = ", ".join(f"#{order_ids[to]} to {to}" for to in jobs)
+        return "\n".join(notes + [
+            f"Orders sent: {sent}. They are being worked on now, in parallel. Reports arrive as each subordinate "
+            "finishes: they are shown at the start of your next turn, or call `wait` to wait for them. Meanwhile, give "
+            "orders to anyone else who can start, check files, update the wiki or answer questions. You can't submit "
+            "until every report is back."])
 
-        parts = [f"Note: {p}. Fix and resend that order if it is still needed." for p in problems]
-        for to, fut in futures.items():
-            rep = fut.result()
-            ctx.event(by_name[to], "report", {"to": agent.name, "chars": len(rep["report"]), "status": rep["status"],
-                                              "status_line": rep["status_line"],
-                                              "order_id": order_ids[to], "text": rep["report"],
-                                              "preview": rep["report"][:240]})
-            parts.append(f"### Report from {to} [{rep['status']}]: {rep['status_line']}\n{rep['report']}")
+    async def _run_order(self, agent: "Agent", child: "Agent", text: str, oid: int) -> None:
+        """One order, in the background: the subordinate works on it, and its report goes back to the commander."""
+        ctx = self.ctx
+        try:
+            rep = await child.handle(assignment_message(agent, text), ctx, order_id=oid)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # only run-stopping errors get here (Agent.handle contains the rest)
+            agent.failure = agent.failure or e
+            agent.outstanding.pop(oid, None)
+            agent.report_signal.set()
+            return
+        ctx.event(child, "report", {"to": agent.name, "chars": len(rep["report"]), "status": rep["status"],
+                                    "status_line": rep["status_line"], "order_id": oid, "text": rep["report"],
+                                    "preview": rep["report"][:240]})
         if ctx.task.has_workspace:
-            score = await asyncio.to_thread(ctx.task.progress, ctx.workspace)
+            try:
+                score = await asyncio.to_thread(ctx.task.progress, ctx.workspace)
+            except Exception:
+                score = None
             if score is not None:
                 ctx.event(agent, "progress", {"score": score, "round": ctx.delegate_rounds[agent.name]})
-        return "\n\n".join(parts)
+        agent.arrived.append({"order_id": oid, "to": child.name, "status": rep["status"],
+                              "text": f"### Report from {child.name} on order #{oid} [{rep['status']}]: "
+                                      f"{rep['status_line']}\n{rep['report']}"})
+        agent.outstanding.pop(oid, None)
+        agent.report_signal.set()
+
+    async def _t_wait(self, agent: "Agent", args: dict) -> str:
+        mode = args.get("for") or "any"
+        if not agent.outstanding and not agent.arrived:
+            raise ToolError("you have no orders out and no reports waiting")
+        t0, waiting_on = time.monotonic(), [o["to"] for o in agent.outstanding.values()]
+        self.ctx.live(agent, "waiting", {"on": waiting_on})
+        await agent.wait_for(lambda: not agent.outstanding or (mode == "any" and agent.arrived))
+        self.ctx.live(agent, "working", {})
+        reps, agent.arrived = agent.arrived, []
+        self.ctx.event(agent, "wait", {"for": mode, "on": waiting_on, "got": [r["to"] for r in reps],
+                                       "seconds": round(time.monotonic() - t0, 1),
+                                       "still_out": [o["to"] for o in agent.outstanding.values()]})
+        return "\n\n".join(r["text"] for r in reps) + agent.outstanding_note()
 
     # ---- direct communication ----
     def _check_contact(self, agent: "Agent", to: str) -> tuple["Agent", str]:

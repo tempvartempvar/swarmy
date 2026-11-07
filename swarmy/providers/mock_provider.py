@@ -127,6 +127,8 @@ class MockProvider(Provider):
             return ToolCall(cid, "wiki_read", {"wiki": wiki})
         if "run_tests" in tools and "run_tests" not in used:
             return ToolCall(cid, "run_tests", {})
+        if "wait" in tools and "delegate" in used and "wait" not in used:
+            return ToolCall(cid, "wait", {"for": "all"})
         props = tools["submit"].parameters["properties"] if "submit" in tools else {}
         args = {"report": f"[mock] placeholder report from {me} ({len(used)} tool calls)",
                 "status": "[mock] placeholder status"}

@@ -141,12 +141,16 @@ class OrderRules(BaseModel):
     structured: every order has an objective, distilled context, deliverables, constraints and a
     done-when test (a simplified military orders format). free: a single free-text task.
     no_forwarding rejects orders (and wiki edits) that paste long passages of the writer's own orders.
+    blocking: when false (the default), `delegate` returns at once and reports arrive as subordinates
+    finish, so a commander can start several units, keep working and collect reports with `wait`. When
+    true, `delegate` waits for every report before returning (commanders can't act in the meantime).
     """
 
     model_config = ConfigDict(extra="forbid")
     format: Literal["structured", "free"] = "structured"
     max_chars: int = Field(4000, ge=200)
     no_forwarding: bool = True
+    blocking: bool = False
 
 
 class Node:

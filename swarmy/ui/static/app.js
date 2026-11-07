@@ -847,6 +847,8 @@ function commPanel() {
   out.push(field("Max length", num(o.max_chars ?? 4000, (v) => updO("max_chars", v || 4000), "o-max", { min: 200, step: 100 }), "characters per order"));
   out.push(check("Reject orders that relay the commander's own orders verbatim", o.no_forwarding !== false, (v) => updO("no_forwarding", v),
     "also stops pasting orders into wikis", "o-fwd"));
+  out.push(check("Commanders wait for every report before doing anything else (blocking orders)", o.blocking === true, (v) => updO("blocking", v),
+    "off: orders run in the background, so commanders can start several units, keep working and collect reports with wait", "o-block"));
   out.push(h("h3", {}, "How"));
   const modes = c.modes || ["ask", "message"];
   const setMode = (mode, on) => upd("modes", on ? [...new Set([...modes, mode])] : modes.filter((x) => x !== mode));
@@ -1111,6 +1113,7 @@ function fmtEvent(ev) {
     case "crash": return h("div", { class: "ev bad" }, `${who} hit an internal error in ${d.where} (contained): ${d.error}`);
     case "checkin": return h("div", { class: "ev warn" }, `Check-in ${d.round}/${d.max} with ${who}: ${d.reason}`, pv(d.tests));
     case "checkin_skipped": return h("div", { class: "ev warn" }, `No check-in: ${d.reason}`);
+    case "wait": return h("div", { class: "ev" }, `${who} waited ${Number(d.seconds || 0).toFixed(0)}s for reports: got ${(d.got || []).join(", ") || "none"}${d.still_out && d.still_out.length ? `; still out: ${d.still_out.join(", ")}` : ""}`);
     case "turn_limit": return h("div", { class: "ev warn" }, `${who} used all ${d.turns || ""} of its turns without submitting`);
     case "gave_up": return h("div", { class: "ev warn" }, `${who} stopped calling tools without submitting`);
     case "refusal": return h("div", { class: "ev bad" }, `${who} declined`);

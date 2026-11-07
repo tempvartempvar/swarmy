@@ -339,7 +339,25 @@ orders:
   format: structured     # structured | free (a single free-text task)
   max_chars: 4000        # per order
   no_forwarding: true    # reject verbatim relaying of one's own orders
+  blocking: false        # false: orders run in the background (see below)
 ```
+
+Field limits and `max_chars` allow 10% over before an order is rejected. A rejected order costs a
+whole commander call, so being a few characters over shouldn't trigger one.
+
+**Orders run in the background.** `delegate` returns at once, and each order is worked on in
+parallel while the commander keeps going. It can start other units, check files, update the wiki,
+or answer questions. Reports arrive as subordinates finish: they're shown at the start of the
+commander's next turn, or it can call `wait` to wait for any report (or `for: all`). A subordinate
+takes one order at a time. A commander can't submit while orders are still out. If it stops anyway
+(turn limit, error), its late reports are collected and passed up with its own. Commanders are told
+to start every unit that can begin now. A unit that needs another's results should start on what it
+can (reading the spec, scaffolding, test cases), and be told where its inputs will appear.
+
+With `blocking: true`, `delegate` waits for every report before returning, and the commander can't
+act in the meantime. In one real run under that mode, the field marshal ordered engineering to "wait
+for the research facts" before research had any orders, and research sat idle for nearly four
+minutes. Keep the setting the same across the structures you compare.
 
 The run explorer's chain of orders shows each order's objective in the outline and its sections in
 full. The **Signals** tab in the designer has the same settings.
@@ -390,6 +408,10 @@ You can read it in four places:
 
 The end reason is also in `result.json` (`end_reason`), in the designer's result box, and in the
 `runs` table.
+
+**Runaway replies.** When a reply hits the output limit without calling a tool, the agent is told
+exactly that: keep the reasoning short, call one tool, and write long content to files in parts.
+The generic "use your tools" reminder is used otherwise.
 
 **Tool calls written as text.** Some models (gpt-oss, for one) sometimes write a tool call as
 plain text instead of making it, such as `{"report": "...", "status": "..."}` or
