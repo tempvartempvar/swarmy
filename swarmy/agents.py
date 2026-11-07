@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import re
 import time
 import traceback
 from typing import TYPE_CHECKING
@@ -10,7 +12,7 @@ from .catalog import Catalog, ModelSpec, Price
 from .config import Node, NodeSettings, OrgConfig
 from .prompts import NUDGE, system_prompt
 from .errors import stops_run
-from .providers import ProviderError, ToolResult
+from .providers import ProviderError, ToolCall, ToolResult
 from .tools import STATUS_FALLBACK, STATUS_WORDS, tool_specs, validate_args
 
 if TYPE_CHECKING:
@@ -105,7 +107,7 @@ class Agent:
         self.conv.add_user(text)
         ctx.transcript.write(node=self.name, kind="input", text=text)
 
-        nudges, last_text = 0, ""
+        nudges, last_text, force_tool = 0, "", False
         limit = self.max_turns(ctx.org)
         for turn in range(limit):
             self.turns = turn + 1
@@ -115,7 +117,15 @@ class Agent:
             queued = await gate.acquire()
             ctx.live(self, "thinking", {})
             try:
-                result = await provider.step(self.conv, self.model, max_tokens=max_tokens, effort=self.spec.effort)
+                # after a reminder, OpenAI-compatible endpoints are told a tool call is required
+                choice = "required" if force_tool and self.model.kind == "openai" else None
+                try:
+                    result = await provider.step(self.conv, self.model, max_tokens=max_tokens, effort=self.spec.effort,
+                                                 tool_choice=choice)
+                except ProviderError:
+                    if choice is None:
+                        raise
+                    result = await provider.step(self.conv, self.model, max_tokens=max_tokens, effort=self.spec.effort)
             except ProviderError as e:
                 ctx.event(self, "error", {"error": str(e)[:500]})
                 ctx.transcript.write(node=self.name, kind="error", error=str(e))
@@ -140,14 +150,27 @@ class Agent:
                 return {"report": f"[{self.name} declined the request]", "answer": None, "status": "refused"}
 
             if not result.tool_calls:
+                salvaged = self._salvage_submit(result.text)
+                if salvaged is not None:
+                    problem = self._submit_problem(salvaged, ctx)
+                    ctx.event(self, "salvaged", {"tool": "submit", "accepted": problem is None,
+                                                 "problem": (problem or "")[:300]})
+                    if problem is None:
+                        return {"report": str(salvaged.get("report") or salvaged.get("answer") or ""),
+                                "answer": None if salvaged.get("answer") is None else str(salvaged["answer"]),
+                                "status": "submitted", "status_line": salvaged["status"]}
                 if nudges < MAX_NUDGES:
                     nudges += 1
+                    force_tool = True
                     ctx.event(self, "nudge", {"stop": result.stop_reason})
-                    self.conv.add_user(NUDGE)
+                    self.conv.add_user(NUDGE if salvaged is None else
+                                       f"Your submission was written as text, so it was not delivered: {problem} "
+                                       "Call the `submit` tool itself (a tool call, not text).")
                     continue
                 ctx.event(self, "gave_up", {"nudges": nudges, "stop": result.stop_reason})
                 return {"report": last_text or "[no report]", "answer": None, "status": "no_submit"}
 
+            force_tool = False
             if result.stop_reason == "max_tokens":
                 self.conv.add_tool_results([
                     ToolResult(c.id, "Not executed: your response hit the output-token limit. Retry with a "
@@ -158,18 +181,9 @@ class Agent:
             submission = None
             for call in sorted(result.tool_calls, key=lambda c: c.name == "submit"):
                 if call.name == "submit" and call.error is None and "submit" in self.specs:
-                    problem = (validate_args(self.specs["submit"], {**call.arguments, "status": "x"})
-                               or self._status_problem(call.arguments))
+                    problem = self._submit_problem(call.arguments, ctx)
                     if problem:
-                        outputs[call.id] = ToolResult(call.id, f"Submission rejected: {problem}", True)
-                    elif self._should_remind(ctx):
-                        self.reminded = True
-                        ctx.event(self, "wiki_reminder", {})
-                        writable = [w.id for w, can in ctx.wiki_access(self) if can]
-                        outputs[call.id] = ToolResult(
-                            call.id, "Not submitted yet. Your report only reaches your commander. If your work produced "
-                            "facts, decisions, interfaces or results that others need, record them on the right "
-                            f"topic page first ({', '.join(writable)}). Then call submit again; it will be accepted.")
+                        outputs[call.id] = ToolResult(call.id, problem, not problem.startswith("Not submitted yet"))
                     else:
                         submission = call.arguments
                         outputs[call.id] = ToolResult(call.id, "Submitted.")
@@ -189,6 +203,51 @@ class Agent:
         ctx.event(self, "turn_limit", {"turns": limit})
         return {"report": f"[turn limit reached] {last_text}", "answer": None, "status": "turn_limit"}
 
+
+    def _submit_problem(self, args: dict, ctx: "RunContext") -> str | None:
+        """Why a submit can't be accepted yet (None if it can): bad arguments, the status rule, or the
+        one-time reminder to record findings on a wiki first."""
+        problem = validate_args(self.specs["submit"], {**args, "status": "x"}) or self._status_problem(args)
+        if problem:
+            return f"Submission rejected: {problem}"
+        if self._should_remind(ctx):
+            self.reminded = True
+            ctx.event(self, "wiki_reminder", {})
+            writable = [w.id for w, can in ctx.wiki_access(self) if can]
+            return ("Not submitted yet. Your report only reaches your commander. If your work produced facts, "
+                    "decisions, interfaces or results that others need, and your orders don't say otherwise, record "
+                    f"them on the right topic page first ({', '.join(writable)}). Then call submit again; it will "
+                    "be accepted.")
+        return None
+
+    def _salvage_submit(self, text: str) -> dict | None:
+        """Some models (gpt-oss, for one) sometimes write the submit call as text, e.g.
+        {"report": "...", "status": "..."} or {"name": "submit", "arguments": {...}}, possibly in a code
+        block. Recover those arguments; anything else is left alone."""
+        if "submit" not in self.specs or "{" not in (text or ""):
+            return None
+        props = set(self.specs["submit"].parameters.get("properties", {}))
+        decoder = json.JSONDecoder()
+        for m in re.finditer(r"\{", text):
+            try:
+                obj, _ = decoder.raw_decode(text[m.start():])
+            except ValueError:
+                continue
+            if not isinstance(obj, dict):
+                continue
+            name = obj.get("name") or obj.get("tool") or obj.get("function")
+            args = obj.get("arguments") or obj.get("parameters") or obj.get("args")
+            if name == "submit" and isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except ValueError:
+                    args = None
+            if name == "submit" and isinstance(args, dict):
+                return args
+            if obj and set(obj) <= props and ("report" in obj or "answer" in obj):
+                return obj
+            return None  # the first JSON object in the text isn't a submit: leave it
+        return None
 
     def _should_remind(self, ctx: "RunContext") -> bool:
         if self.reminded or self.wiki_writes or not ctx.org.knowledge.remind_before_submit:

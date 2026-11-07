@@ -97,3 +97,12 @@ def openrouter_stub(script: list[tuple[int, bytes]]):
         status, payload = script[min(i, len(script) - 1)]
         return status, "application/json", payload
     return _Stub(responder)
+
+
+def openrouter_text(text: str) -> bytes:
+    """A completion with plain text and no tool calls (e.g. a tool call written out as text)."""
+    return json.dumps({
+        "id": "gen-t", "model": "openai/gpt-oss-120b",
+        "choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": text}}],
+        "usage": {"prompt_tokens": 500, "completion_tokens": 40, "cost": 0.00001},
+    }).encode()

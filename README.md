@@ -391,6 +391,13 @@ You can read it in four places:
 The end reason is also in `result.json` (`end_reason`), in the designer's result box, and in the
 `runs` table.
 
+**Tool calls written as text.** Some models (gpt-oss, for one) sometimes write a tool call as
+plain text instead of making it, such as `{"report": "...", "status": "..."}` or
+`{"name": "submit", "arguments": {...}}`. A submit written this way is recovered and accepted, and
+the run log records that it happened. After any plain-text reply, the next call on an
+OpenAI-compatible endpoint sets `tool_choice: "required"`, falling back to `auto` if the endpoint
+refuses it, so the agent has to make a real tool call.
+
 **Status updates.** `submit` takes a required `status` of at most five words, so finishing an order
 also produces a one-line update at no extra cost. A missing or longer status is rejected once with
 an example. If it happens again, the first five words are kept, so this field never blocks real

@@ -83,6 +83,10 @@ def describe_event(node: str, kind: str, d: dict) -> tuple[int, str]:
         return W, f"{node} used all {d.get('turns', '?')} of its turns without calling submit"
     if kind == "gave_up":
         return W, f"{node} stopped calling tools and never submitted (after {d.get('nudges')} reminders)"
+    if kind == "salvaged":
+        if d.get("accepted"):
+            return W, f"{node} wrote its {d.get('tool')} call as text instead of a tool call; recovered and accepted it"
+        return W, f"{node} wrote its {d.get('tool')} call as text; recovered it but it was rejected: {d.get('problem')}"
     if kind == "nudge":
         return I, f"{node} answered in plain text (stop: {d.get('stop')}); reminded to use tools or submit"
     if kind == "refusal":
