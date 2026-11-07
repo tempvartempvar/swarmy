@@ -49,7 +49,7 @@ def test_anthropic_request_shape_and_cost(local_env, monkeypatch, tmp_path):
             reg = ProviderRegistry()
             try:
                 return await run_one(_solo("opus", "max"), task, catalog=catalog, registry=reg, tracer=tracer,
-                                     results_dir=tmp_path, run_cap=2.0)
+                                     results_dir=tmp_path, run_cap=2.0, preflight=False)
             finally:
                 await reg.aclose()
 
@@ -95,7 +95,7 @@ def test_openrouter_request_shape_retry_and_reported_cost(local_env, monkeypatch
             reg = ProviderRegistry()
             try:
                 return await run_one(_solo("gpt-oss-120b", "high"), task, catalog=catalog, registry=reg,
-                                     tracer=tracer, results_dir=tmp_path, run_cap=0.5)
+                                     tracer=tracer, results_dir=tmp_path, run_cap=0.5, preflight=False)
             finally:
                 await reg.aclose()
 
@@ -124,7 +124,7 @@ def test_openrouter_daily_quota_is_fatal(local_env, monkeypatch, tmp_path):
             reg = ProviderRegistry()
             try:
                 return await run_one(_solo("gemma-free"), task, catalog=catalog, registry=reg,
-                                     tracer=Tracer(tmp_path / "db.sqlite"), results_dir=tmp_path, run_cap=0.5)
+                                     tracer=Tracer(tmp_path / "db.sqlite"), results_dir=tmp_path, run_cap=0.5, preflight=False)
             finally:
                 await reg.aclose()
 
@@ -150,7 +150,7 @@ def test_custom_openai_endpoint_without_key(local_env, tmp_path):
             reg = ProviderRegistry()
             try:
                 return await run_one(_solo("local-llm", "high"), task, catalog=catalog, registry=reg,
-                                     tracer=Tracer(tmp_path / "db.sqlite"), results_dir=tmp_path, run_cap=0.5)
+                                     tracer=Tracer(tmp_path / "db.sqlite"), results_dir=tmp_path, run_cap=0.5, preflight=False)
             finally:
                 await reg.aclose()
 
@@ -190,7 +190,7 @@ def test_anthropic_compatible_gateway(local_env, monkeypatch, tmp_path):
             reg = ProviderRegistry()
             try:
                 return await run_one(_solo("gw-haiku"), task, catalog=catalog, registry=reg,
-                                     tracer=Tracer(tmp_path / "db.sqlite"), results_dir=tmp_path, run_cap=0.5)
+                                     tracer=Tracer(tmp_path / "db.sqlite"), results_dir=tmp_path, run_cap=0.5, preflight=False)
             finally:
                 await reg.aclose()
 
@@ -198,3 +198,65 @@ def test_anthropic_compatible_gateway(local_env, monkeypatch, tmp_path):
     assert summary["passed"], summary.get("error")
     auth = stub.headers[0].get("x-api-key") or stub.headers[0].get("authorization", "")
     assert "gw-secret" in auth and stub.headers[0]["x-team"] == "research"
+
+
+ZDR_404 = json.dumps({"error": {"code": 404, "message": (
+    "0 endpoints out of 1 requested are available matching your guardrail restrictions and data policy. "
+    "ZDR violation (account settings): 1 endpoint excluded")}}).encode()
+
+
+def test_preflight_stops_before_the_mission_when_a_model_cant_be_used(local_env, monkeypatch, tmp_path):
+    import swarmy.providers as providers
+
+    monkeypatch.setattr(providers, "_PREFLIGHT_OK", {})
+    task = make_task("qa", {"kind": "chain", "hops": 2}, 1)
+    with openrouter_stub([(404, ZDR_404)]) as stub:
+        catalog = Catalog.load(offline=True)
+        catalog.endpoints["openrouter"].base_url = stub.url + "/api/v1"
+
+        async def go():
+            reg = ProviderRegistry()
+            try:
+                return await run_one(_solo("qwen-flash"), task, catalog=catalog, registry=reg,
+                                     tracer=Tracer(tmp_path / "db.sqlite"), results_dir=tmp_path, run_cap=0.5)
+            finally:
+                await reg.aclose()
+
+        s = asyncio.run(go())
+    assert s["status"] == "fatal" and s["n_calls"] == 0 and len(stub.requests) == 1
+    first = stub.requests[0]
+    assert first["model"] == "qwen/qwen3.7-flash" and first["tools"][0]["function"]["name"] == "noop"
+    assert s["end_reason"].startswith("Preflight: 1 of 1 models can't be used, so nothing was run.")
+    assert "qwen-flash (qwen/qwen3.7-flash on openrouter), used by solo" in s["end_reason"]
+    assert "openrouter.ai/settings/privacy" in s["end_reason"]
+    log = (tmp_path / "runs" / s["run_id"] / "run.log").read_text()
+    assert "preflight: qwen-flash (qwen/qwen3.7-flash on openrouter) can't be used" in log
+    assert "mission ->" not in log
+
+
+def test_preflight_passes_then_caches(local_env, monkeypatch, tmp_path):
+    import swarmy.providers as providers
+
+    monkeypatch.setattr(providers, "_PREFLIGHT_OK", {})
+    task = make_task("qa", {"kind": "chain", "hops": 2}, 1)
+    script = [(200, openrouter_tool_call("noop", {})),
+              (200, openrouter_tool_call("submit", {"answer": task.gold()["expected"], "report": "done"}))]
+    with openrouter_stub(script) as stub:
+        catalog = Catalog.load(offline=True)
+        catalog.endpoints["openrouter"].base_url = stub.url + "/api/v1"
+
+        async def go(sub):
+            reg = ProviderRegistry()
+            try:
+                return await run_one(_solo("gpt-oss-120b"), task, catalog=catalog, registry=reg,
+                                     tracer=Tracer(tmp_path / "db.sqlite"), results_dir=tmp_path / sub, run_cap=0.5)
+            finally:
+                await reg.aclose()
+
+        s1 = asyncio.run(go("a"))
+        n_after_first = len(stub.requests)
+        s2 = asyncio.run(go("b"))
+    assert s1["status"] == "completed" and s1["n_calls"] == 1 and n_after_first == 2  # preflight + one real call
+    assert s2["status"] == "completed" and len(stub.requests) == 3  # checked recently: no second preflight
+    log = (tmp_path / "a" / "runs" / s1["run_id"] / "run.log").read_text()
+    assert "preflight: gpt-oss-120b (openai/gpt-oss-120b on openrouter) ok" in log

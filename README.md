@@ -60,6 +60,9 @@ Open the designer:
 swarmy ui                  # http://127.0.0.1:8765
 ```
 
+`swarmy ui` loads its code when it starts. After updating swarmy (`git pull`), restart it. The page
+shows a banner if the code on disk has changed since the server started.
+
 Check everything offline first. The scripted mock provider runs the whole pipeline without
 making any API calls. Mock agents don't think: every order, note and report they write is a
 labelled `[mock]` placeholder, and mock runs are marked MOCK throughout the designer.
@@ -104,7 +107,7 @@ greenhouse, and naive controllers (never water, flood by day, ignore quiet hours
 
 **The squad** (`configs/orgs/openrouter-squad.yaml`): a Claude Haiku Field Marshal (via OpenRouter)
 commanding a research captain (DeepSeek) with two scouts, an engineering captain (DeepSeek) with two
-sappers, and a test captain (Qwen) with a tester. The soldiers are gpt-oss-120b and Qwen Flash. Each
+sappers, and a test captain (GLM) with a tester. The soldiers are gpt-oss-120b and GLM Flash. Each
 position has a goal. There's an org-wide `orders` wiki for researched facts and a log per unit.
 Captains can talk to each other, and testers can talk to sappers directly.
 
@@ -375,6 +378,21 @@ You can read it in four places:
 The end reason is also in `result.json` (`end_reason`), in the designer's result box, and in the
 `runs` table.
 
+Before a real run, swarmy checks every model the org uses with one tiny tool-enabled call each,
+sent in parallel the way agents will call it. This costs a fraction of a cent, and a model that
+passed in the last 30 minutes isn't checked again. If a model can't be used, the run stops before
+the mission is issued, and the end reason lists every such model, which positions use it, and how
+to fix it. A bad key, missing credits, an unknown model, or an OpenRouter privacy setting that
+excludes all of a model's providers would otherwise only show up when that position first acts. Use
+`--no-preflight` to skip the check.
+
+**OpenRouter privacy settings.** If your account requires Zero Data Retention (ZDR) at
+[openrouter.ai/settings/privacy](https://openrouter.ai/settings/privacy), only models with a ZDR
+provider work. Other models fail with "0 endpoints ... matching your guardrail restrictions and
+data policy". The bundled `openrouter-squad` only uses models that have ZDR providers.
+[openrouter.ai/api/v1/endpoints/zdr](https://openrouter.ai/api/v1/endpoints/zdr) lists them for
+every model.
+
 Only two kinds of error end a run early: the endpoint refusing it (bad key, no credits, unknown
 model, data-policy mismatch) and the budget running out. Anything else is contained where it
 happens. A tool that hits an unexpected error (reading a binary file, writing to a directory)
@@ -436,7 +454,7 @@ a Cartesian product (see `configs/sweeps/model-swap.yaml`):
 orgs:
   - path: configs/orgs/regiment.yaml
     matrix:
-      private: [gpt-oss-120b, qwen-flash, haiku]
+      private: [gpt-oss-120b, glm-flash, haiku]
       effort.colonel: [low, medium]
 ```
 
@@ -575,7 +593,7 @@ These assume about 8k prompt tokens (mostly cached) and 1.5k output tokens:
 | Opus 5.5 | 0.03-0.05 | max effort can produce 10k+ thinking tokens, which is $0.20+ per call |
 | Sonnet 5.5 | 0.015-0.025 | |
 | Haiku 5.5 | ~0.001 | cheap enough for multi-seed sweeps |
-| gpt-oss-120b / qwen-flash (OpenRouter) | ~0.0003 | good default workers |
+| gpt-oss-120b / glm-flash (OpenRouter) | ~0.0003-0.002 | good default workers |
 | `:free` models | 0 | rate-limited (~20 req/min plus a daily cap), so they stall sweeps. Free endpoints may log prompts. |
 
 ### Included sweeps (all ≤ $5)

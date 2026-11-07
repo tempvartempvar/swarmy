@@ -6,7 +6,7 @@ concurrency: 3
 orgs:
   - path: configs/orgs/regiment.yaml
     matrix:
-      private: [gpt-oss-120b, qwen-flash, haiku]
+      private: [gpt-oss-120b, glm-flash, haiku]
       effort.colonel: [low, medium]
 tasks:
   - {family: code, params: {n: 6, coupling: 0.3}, seeds: [1]}

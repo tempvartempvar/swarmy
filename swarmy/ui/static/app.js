@@ -1068,7 +1068,8 @@ async function loadExplorer(reset) {
           [S.wb.inst, S.wb.page] = first || [null, null]; S.wb.rev = null;
         }
       }
-    } catch (e) { toast(e.message); }
+      S.ex.loadError = null;
+    } catch (e) { S.ex.loadError = e.message; toast(e.message); checkStale(); }
   }
   renderExplorer();
   const live = exRunInfo().status === "running" || (S.run && S.run.run_id === rid && S.run.status === "running");
@@ -1083,6 +1084,8 @@ function renderExplorer() {
   else if (S.ex.tab === "files") renderFiles();
   else renderWikiBrowser();
   if (S.ex.tab !== "orders" && exRunInfo().mock) $("#ex-main").prepend(mockBanner(true));
+  if (S.ex.loadError) $("#ex-main").prepend(h("div", { class: "load-error" }, h("strong", {}, `Couldn't load this run's ${S.ex.tab}: `), S.ex.loadError,
+    $("#stale-banner") ? " The server is older than the page: restart swarmy ui." : ""));
 }
 const ORDER_SECTIONS = [["objective", "Objective"], ["context", "Context"], ["deliverables", "Deliverables"],
   ["constraints", "Constraints"], ["done_when", "Done when"]];
@@ -1491,11 +1494,25 @@ function bindUI() {
   });
 }
 
+async function checkStale() {
+  try {
+    const st = await api("/api/status");
+    let el = $("#stale-banner");
+    if (st.stale && !el) {
+      el = h("div", { id: "stale-banner", class: "stale-banner" },
+        h("strong", {}, "swarmy was updated on disk. "), "This server is still running the old code. Restart it to use the new version: press Ctrl+C in the terminal running ",
+        h("code", {}, "swarmy ui"), ", start it again, then reload this page.");
+      document.body.prepend(el);
+    } else if (!st.stale && el) el.remove();
+  } catch (e) { /* server stopped: the next api call will say so */ }
+}
+
 async function init() {
   try {
     S.catalog = await api("/api/catalog");
     await refreshOrgs();
     bindCanvas(); bindUI();
+    checkStale(); setInterval(checkStale, 20000);
     const pick = S.orgs.find((o) => o.file === "field-army") || S.orgs.find((o) => !o.error);
     if (pick) await openOrg(pick.file); else await newOrg();
   } catch (e) { banner(e.message); }

@@ -17,7 +17,7 @@ tree:
       children:
         - {role: scout, model: gpt-oss-120b}
         - {role: scout, model: gpt-oss-120b}
-        - {role: scout, model: qwen-flash}
+        - {role: scout, model: glm-flash}
     - role: colonel
       name: engineer-colonel
       model: haiku

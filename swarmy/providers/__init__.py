@@ -79,3 +79,42 @@ async def probe(spec: ModelSpec, prompt: str = "Reply with the single word OK.")
         return {"ok": False, "error": f"{type(e).__name__}: {e}", "latency_s": round(time.monotonic() - t0, 2)}
     finally:
         await reg.aclose()
+
+
+# ---- preflight: is every model of an org usable before a run starts? ----
+_PREFLIGHT_TOOL = ToolSpec("noop", "Does nothing. Only here to check tool support.",
+                           {"type": "object", "properties": {}})
+_PREFLIGHT_OK: dict[tuple[str, str], float] = {}  # (endpoint, model) -> when it last passed
+PREFLIGHT_TTL_S = 1800
+
+
+async def preflight(registry: "ProviderRegistry", specs: list[ModelSpec], timeout_s: float = 90) -> list[dict]:
+    """One tiny tool-enabled call per model, in parallel, the way agents call it (same endpoint,
+    same routing), so a bad key, missing credits, an unknown model or a privacy setting that excludes
+    every provider shows up before anything else runs. Models that passed in the last 30 minutes
+    are skipped. Returns one dict per model: {alias, model, endpoint, ok, skipped, fatal, error}."""
+    import asyncio
+    import time
+
+    async def one(spec: ModelSpec) -> dict:
+        out = {"alias": spec.alias, "model": spec.model, "endpoint": spec.endpoint, "ok": True, "skipped": False,
+               "fatal": False, "error": None}
+        key = (spec.endpoint, spec.model)
+        if spec.kind == "mock" or registry.mock or time.time() - _PREFLIGHT_OK.get(key, 0) < PREFLIGHT_TTL_S:
+            out["skipped"] = True
+            return out
+        try:
+            provider = registry.provider_for(spec)
+            conv = provider.new_conversation("Connectivity check.", [_PREFLIGHT_TOOL])
+            conv.add_user("Reply with OK.")
+            async with asyncio.timeout(timeout_s):
+                await provider.step(conv, spec, max_tokens=64, effort=None)
+            _PREFLIGHT_OK[key] = time.time()
+        except FatalProviderError as e:
+            out.update(ok=False, fatal=True, error=str(e))
+        except Exception as e:  # provider errors, timeouts: report, but they may be transient
+            out.update(ok=False, error=f"{type(e).__name__}: {e}")
+        return out
+
+    unique = list({(s.endpoint, s.model): s for s in specs}.values())
+    return list(await asyncio.gather(*(one(s) for s in unique)))

@@ -20,7 +20,7 @@ from .config import OrgConfig
 from .rules import WikiInstance, contacts, wiki_instances, wikis_for
 from .prompts import checkin_message, checkin_reason, root_message
 from .runlog import close_run_log, describe_call, describe_event, explain_end, open_run_log
-from .providers import FatalProviderError, ProviderRegistry, StepResult
+from .providers import FatalProviderError, ProviderRegistry, StepResult, preflight
 from .tasks import TaskInstance
 from .tools import Toolbox
 from .tracing import Tracer, Transcript, new_id
@@ -129,6 +129,7 @@ async def run_one(
     listener: Callable[[dict], None] | None = None,
     on_start: Callable[[RunContext], None] | None = None,
     echo: int | None = None,
+    preflight: bool = True,
 ) -> dict:
     run_id = new_id("run")
     run_dir = results_dir / "runs" / run_id
@@ -156,10 +157,14 @@ async def run_one(
         log.info("  %s%s (%s) on %s, effort %s, max %d turns", "  " * a.level, a.name, a.spec.role, a.model.alias,
                  a.spec.effort or "default", a.max_turns(org))
     log.info("check-ins: up to %d%s", rules.max, ", also when public tests fail" if rules.verify_tests else "")
-    ctx.event(root, "mission", {"order_id": 0, "to": root.name, "to_role": root.spec.role, "title": task.title,
-                                "text": task.brief, "family": task.family})
+    problem = await _preflight(ctx, root) if preflight and not registry.mock else None
+    if problem is not None:  # a model can't be used: stop before issuing the mission
+        status, error, fatal = "fatal", problem.args[0], problem
+    else:
+        ctx.event(root, "mission", {"order_id": 0, "to": root.name, "to_role": root.spec.role, "title": task.title,
+                                    "text": task.brief, "family": task.family})
     message = root_message(task)
-    while True:
+    while problem is None:
         try:
             async with asyncio.timeout_at(deadline):
                 result = await root.handle(message, ctx, order_id=0)
@@ -277,6 +282,37 @@ def _classify(e: BaseException, timeout_s: float) -> tuple[str, str, FatalProvid
     if any(isinstance(x, TimeoutError) for x in leaves):
         return "timeout", f"exceeded {timeout_s:.0f}s", None
     return "error", "".join(traceback.format_exception(leaves[0]))[-3000:], None
+
+
+async def _preflight(ctx: RunContext, root: Agent) -> FatalProviderError | None:
+    """Check every model once before the mission; a FatalProviderError listing each unusable one, or None."""
+    specs = [a.model for a in root.walk()]
+    results = await preflight(ctx.registry, specs)
+    users: dict[str, list[str]] = {}
+    for a in root.walk():
+        users.setdefault(a.model.alias, []).append(a.name)
+    bad = []
+    for r in results:
+        who = ", ".join(users.get(r["alias"], []))
+        if r["skipped"]:
+            ctx.log.debug("preflight: %s skipped (mock, or checked recently)", r["alias"])
+        elif r["ok"]:
+            ctx.log.info("preflight: %s (%s on %s) ok", r["alias"], r["model"], r["endpoint"])
+        elif r["fatal"]:
+            ctx.log.error("preflight: %s (%s on %s) can't be used: %s", r["alias"], r["model"], r["endpoint"], r["error"])
+            bad.append(f"- {r['alias']} ({r['model']} on {r['endpoint']}), used by {who}: {r['error']}")
+        else:
+            ctx.log.warning("preflight: %s (%s on %s) failed, continuing anyway: %s", r["alias"], r["model"],
+                            r["endpoint"], r["error"])
+    if not bad:
+        return None
+    hint = ""
+    if any("data policy" in b or "ZDR" in b or "guardrail" in b for b in bad):
+        hint = ("\nYour OpenRouter privacy settings exclude every provider of these models. Allow them at "
+                "https://openrouter.ai/settings/privacy, or swap them for models with matching providers "
+                "(see the note in configs/models.yaml).")
+    return FatalProviderError(f"Preflight: {len(bad)} of {len(results)} models can't be used, so nothing was run.\n"
+                              + "\n".join(bad) + hint)
 
 
 def _public_check(task: TaskInstance, workspace: Path) -> tuple[bool, str]:

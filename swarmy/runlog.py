@@ -146,6 +146,8 @@ def explain_end(status: str, error: str | None, root: str, root_status: str | No
     if status == "timeout":
         return f"The run hit its {timeout_s:.0f}s time limit."
     if status == "fatal":
+        if first.startswith("Preflight"):
+            return (error or "").strip()[:1500]
         return f"The model endpoint refused the run, so it was stopped: {first}"
     if status == "error":
         if root_status == "error":

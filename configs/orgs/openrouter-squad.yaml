@@ -1,9 +1,9 @@
 # A cheap, all-OpenRouter squad built for the greenhouse exercise (one OPENROUTER_API_KEY is all
-# you need). Typical cost of one greenhouse run: a few cents to ~$0.30.
+# you need). Every model here has providers that satisfy a Zero Data Retention account setting. Typical cost of one greenhouse run: a few cents to ~$0.30.
 #   swarmy run --org configs/orgs/openrouter-squad.yaml --task greenhouse --budget 1
 #   swarmy orders            # how the work was planned and handed out
 name: openrouter-squad
-description: Cheap, all-OpenRouter - Claude Haiku field marshal; DeepSeek and Qwen captains; gpt-oss and Qwen soldiers
+description: Cheap, all-OpenRouter - Claude Haiku field marshal; DeepSeek and GLM captains; gpt-oss and GLM soldiers
 tree:
   role: field-marshal
   model: haiku-or
@@ -18,17 +18,17 @@ tree:
         future plans or superseded notes) and written to the orders wiki.
       children:
         - {role: scout, model: gpt-oss-120b}
-        - {role: scout, model: qwen-flash}
+        - {role: scout, model: glm-flash}
     - role: captain
       name: engineering-captain
       model: deepseek-flash
       goal: sim.py implements the documented physics exactly; controller.py is simple, readable and tunable.
       children:
         - {role: sapper, model: gpt-oss-120b}
-        - {role: sapper, model: qwen-flash}
+        - {role: sapper, model: glm-flash}
     - role: captain
       name: test-captain
-      model: qwen-flash
+      model: glm-flash
       goal: >-
         Nothing is reported done until run_tests passes every criterion. Send failures back to
         engineering with the numbers, and keep TEST_REPORT.md up to date.

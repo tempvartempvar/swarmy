@@ -33,6 +33,15 @@ EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"]
 # Rough output tokens per call by effort, for the cost hint only.
 TYPICAL_OUTPUT = {None: 1500, "low": 700, "medium": 1500, "high": 3000, "xhigh": 5000, "max": 8000}
 SAFE_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+PACKAGE = Path(__file__).resolve().parent.parent
+
+
+def code_stamp() -> tuple:
+    """Changes whenever swarmy's code or the page's files change on disk."""
+    files = sorted([*PACKAGE.rglob("*.py"), *STATIC.rglob("*")])
+    return tuple((str(f), f.stat().st_mtime_ns, f.stat().st_size) for f in files if f.is_file())
+
+
 LOG_LINE = re.compile(r"^(?P<time>\d\d:\d\d:\d\d) \+(?P<elapsed>\s*[\d.]+s) (?P<level>[A-Z]+)\s+(?P<text>.*)$")
 RUN_ID = re.compile(r"^run_[0-9]{8}-[0-9]{6}_[0-9a-f]{6}$")
 
@@ -73,6 +82,14 @@ class UIState:
         self.stores: dict[str, dict] = {}
         self.live_ids: dict[str, str] = {}  # run_id -> UI run key, for runs started here
         self.lock = threading.Lock()
+        # Python code is loaded once, at startup; serve the page from the same moment so the two always
+        # match, and tell the page when the code on disk has changed (e.g. after `git pull`).
+        self.code_stamp = code_stamp()
+        self.static = {str(p.relative_to(STATIC)): p.read_bytes() for p in STATIC.rglob("*") if p.is_file()}
+        self.started = time.time()
+
+    def status(self) -> dict:
+        return {"stale": code_stamp() != self.code_stamp, "started": self.started}
 
     # ---- catalog ----
     def catalog_json(self) -> dict:
@@ -465,6 +482,8 @@ def make_handler(state: UIState):
                     return self._json(state.run_state(path.rsplit("/", 1)[1], since))
                 if path == "/api/models":
                     return self._json(state.models_json())
+                if path == "/api/status":
+                    return self._json(state.status())
                 if path == "/api/explorer/runs":
                     return self._json(state.explorer_runs())
                 m = re.match(r"^/api/explorer/([^/]+)/(orders|wikis|files|file|log)$", path)
@@ -505,13 +524,13 @@ def make_handler(state: UIState):
                 self._json({"error": _errors(e)}, 400)
 
         def _static(self, rel: str) -> None:
-            p = (STATIC / rel).resolve()
-            if not p.is_relative_to(STATIC.resolve()) or not p.is_file():
+            body = state.static.get(rel)
+            if body is None:
                 raise FileNotFoundError(rel)
-            ctype = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
+            ctype = mimetypes.guess_type(rel)[0] or "application/octet-stream"
             if ctype.startswith("text/") or ctype in ("application/javascript",):
                 ctype += "; charset=utf-8"
-            self._send(200, p.read_bytes(), ctype)
+            self._send(200, body, ctype)
 
     return Handler
 

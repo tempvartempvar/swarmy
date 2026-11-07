@@ -168,3 +168,16 @@ def test_models_api_local_overrides_and_test(server):
     assert status == 400
     status, probe = call("/api/models/test", {"model": "mock"})
     assert status == 200 and probe["ok"]
+
+
+def test_status_reports_when_code_on_disk_changed(server, monkeypatch):
+    import swarmy.ui.server as srv
+
+    call, base, _ = server
+    status, st = call("/api/status")
+    assert status == 200 and st["stale"] is False
+    monkeypatch.setattr(srv, "code_stamp", lambda: ("changed",))  # e.g. after `git pull`
+    _, st = call("/api/status")
+    assert st["stale"] is True
+    with urllib.request.urlopen(base + "/static/app.js") as r:  # still served, as loaded at startup
+        assert r.status == 200 and b"checkStale" in r.read()

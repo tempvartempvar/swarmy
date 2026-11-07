@@ -69,7 +69,8 @@ def cmd_run(args) -> int:
         try:
             return await run_one(org, task, catalog=catalog, registry=registry, tracer=tracer, results_dir=results,
                                  run_cap=args.budget, timeout_s=args.timeout,
-                                 echo={0: None, 1: logging.INFO}.get(args.verbose, logging.DEBUG))
+                                 echo={0: None, 1: logging.INFO}.get(args.verbose, logging.DEBUG),
+                                 preflight=not args.no_preflight)
         finally:
             await registry.aclose()
             tracer.close()
@@ -352,6 +353,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--budget", type=float, default=0.50, help="hard cap for this run in USD (default 0.50)")
     p.add_argument("--timeout", type=float, default=1200)
     p.add_argument("--mock", action="store_true", help="offline scripted models, no API calls")
+    p.add_argument("--no-preflight", action="store_true",
+                   help="skip the quick check of every model before the run (one tiny call per model)")
     p.add_argument("-v", "--verbose", action="count", default=0,
                    help="print the run log as it happens (-v: orders, reports, errors; -vv: every call too)")
     _add_org_overrides(p)

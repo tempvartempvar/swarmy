@@ -93,12 +93,27 @@ models:
     rpm: 16
 
   # ---------------- OpenRouter: cheap paid (tool-capable) ----------------
+  # OpenRouter routes each call to a provider allowed by your privacy settings
+  # (https://openrouter.ai/settings/privacy). If your account requires Zero Data Retention (ZDR), a
+  # model with no ZDR provider fails with "0 endpoints ... matching your data policy". The list of
+  # ZDR providers per model is at https://openrouter.ai/api/v1/endpoints/zdr. gpt-oss-120b,
+  # deepseek-flash, glm-flash and haiku-or all have ZDR providers; swarmy checks each model before a
+  # real run starts.
   gpt-oss-120b:
     endpoint: openrouter
     model: openai/gpt-oss-120b
     price: {input: 0.012, output: 0.044}
     max_concurrency: 16
 
+  # Has providers matching a Zero Data Retention (ZDR) account setting: see the note at the top of
+  # this section.
+  glm-flash:
+    endpoint: openrouter
+    model: z-ai/glm-5.3-flash
+    price: {input: 0.15, output: 0.50}   # list price; OpenRouter reports the actual (often lower) cost per call
+    max_concurrency: 16
+
+  # Only served by Alibaba, which doesn't offer ZDR: fails on accounts that require ZDR.
   qwen-flash:
     endpoint: openrouter
     model: qwen/qwen3.7-flash
