@@ -322,13 +322,13 @@ explorer.
 Commanders give orders with `delegate`. By default orders are **structured**, a simplified military
 orders format, so every order is a well-constrained task rather than a forwarded brief:
 
-| field | what it holds |
+| field (limit) | what it holds |
 |---|---|
-| `objective` (required) | the single outcome this subordinate must achieve |
-| `context` | only the facts it needs, distilled, in the commander's own words (or a pointer to a wiki page) |
-| `deliverables` (required) | exactly what to hand back: files, facts, decisions, and in what form |
-| `constraints` | interfaces, limits, rules, what not to do |
-| `done_when` (required) | the test that shows the task is finished |
+| `objective` (required, 500) | the single outcome this subordinate must achieve |
+| `context` (2000) | only the facts it needs, distilled, in the commander's own words (or a pointer to a wiki page) |
+| `deliverables` (required, 1200) | exactly what to hand back: files, facts, decisions, and in what form |
+| `constraints` (1200) | interfaces, limits, rules, what not to do |
+| `done_when` (required, 600) | the test that shows the task is finished |
 
 Orders that repeat long passages of the commander's own orders verbatim are rejected, with a message
 telling it to decide the plan and pass on only what each subordinate needs. The same check stops
@@ -348,11 +348,13 @@ whole commander call, so being a few characters over shouldn't trigger one.
 **Orders run in the background.** `delegate` returns at once, and each order is worked on in
 parallel while the commander keeps going. It can start other units, check files, update the wiki,
 or answer questions. Reports arrive as subordinates finish: they're shown at the start of the
-commander's next turn, or it can call `wait` to wait for any report (or `for: all`). A subordinate
-takes one order at a time. A commander can't submit while orders are still out. If it stops anyway
-(turn limit, error), its late reports are collected and passed up with its own. Commanders are told
-to start every unit that can begin now. A unit that needs another's results should start on what it
-can (reading the spec, scaffolding, test cases), and be told where its inputs will appear.
+commander's next turn, or it can call `wait` to wait for any report (or `for: all`). A direct
+message or cc also ends a wait, so a commander can react to news such as "the facts page is up". A
+subordinate takes one order at a time. A commander can't submit while orders are still out, except
+on its last turn. If it stops with orders out (turn limit, error), its late reports are collected
+and passed up with its own. Commanders are told to start every unit that can begin now. A unit that
+needs another's results gets a preparatory order now (reading the spec, scaffolding, test cases) and
+its real order once the inputs exist, because work done before the inputs exist is done with guesses.
 
 With `blocking: true`, `delegate` waits for every report before returning, and the commander can't
 act in the meantime. In one real run under that mode, the field marshal ordered engineering to "wait
@@ -408,6 +410,19 @@ You can read it in four places:
 
 The end reason is also in `result.json` (`end_reason`), in the designer's result box, and in the
 `runs` table.
+
+**Turn budgets.** Each agent is told its turn budget, which is model calls per order
+(`manager_max_turns`, `worker_max_turns`, or a position's `max_turns`). It's warned when 3 turns
+are left and told when it's on its last. Turns that only `wait` for reports don't count. On the last
+turn, a submit is always accepted: the one-time wiki reminder and the five-word status rule don't
+apply, and reports from orders still out are passed up with it. Without these rules, finished work
+was lost as "Ran out of turns".
+
+**The wiki reminder** (`knowledge.remind_before_submit`) is skipped when the agent has written
+files during the order, since its results are already in the workspace and a copy would only
+duplicate them. A `wiki_write` without a page title takes the first Markdown heading of its content.
+Page listings quote titles, and lookups ignore a trailing version note such as "(v2", so a
+misread title doesn't cost a turn.
 
 **Runaway replies.** When a reply hits the output limit without calling a tool, the agent is told
 exactly that: keep the reasoning short, call one tool, and write long content to files in parts.

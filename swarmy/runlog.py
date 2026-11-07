@@ -85,6 +85,8 @@ def describe_event(node: str, kind: str, d: dict) -> tuple[int, str]:
         return W, f"{node} stopped calling tools and never submitted (after {d.get('nudges')} reminders)"
     if kind == "wait":
         still = f"; still out: {', '.join(d['still_out'])}" if d.get("still_out") else ""
+        if d.get("message"):
+            still += "; woken by a message"
         return I, f"{node} waited {d.get('seconds', 0):.1f}s for reports ({d.get('for')}): got {', '.join(d.get('got') or []) or 'none'}{still}"
     if kind == "salvaged":
         if d.get("accepted"):

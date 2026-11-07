@@ -33,7 +33,7 @@ ORDER_FIELDS = [  # (key, heading, required, max chars, description)
     ("objective", "OBJECTIVE", True, 500, "one or two sentences: the single outcome this subordinate must achieve"),
     ("context", "CONTEXT", False, 2000, "only the facts and background they need, distilled in your own words "
                                          "(point to wiki pages or files instead of repeating them)"),
-    ("deliverables", "DELIVERABLES", True, 800, "exactly what to hand back: files, facts, decisions, and in what form"),
+    ("deliverables", "DELIVERABLES", True, 1200, "exactly what to hand back: files, facts, decisions, and in what form"),
     ("constraints", "CONSTRAINTS", False, 1200, "interfaces, limits, rules, what not to do"),
     ("done_when", "DONE WHEN", True, 600, "the test that shows the task is finished"),
 ]
@@ -213,6 +213,10 @@ class Toolbox:
     async def execute(self, agent: "Agent", call: ToolCall, specs: dict[str, ToolSpec]) -> ToolResult:
         if call.error:
             return self._reject(agent, call, f"Tool call rejected: {call.error}")
+        if call.name == "wiki_write" and not call.arguments.get("page"):
+            heading = re.match(r"\s*#{1,3}\s+(.+)", str(call.arguments.get("content") or ""))
+            if heading:
+                call.arguments["page"] = heading.group(1).strip()[:120]
         spec = specs.get(call.name)
         if spec is None:
             return self._reject(agent, call, f"Unknown tool '{call.name}'. Available: {', '.join(specs)}")
@@ -366,13 +370,15 @@ class Toolbox:
             raise ToolError("you have no orders out and no reports waiting")
         t0, waiting_on = time.monotonic(), [o["to"] for o in agent.outstanding.values()]
         self.ctx.live(agent, "waiting", {"on": waiting_on})
-        await agent.wait_for(lambda: not agent.outstanding or (mode == "any" and agent.arrived))
+        await agent.wait_for(lambda: not agent.outstanding or (mode == "any" and agent.arrived) or agent.message_waiting)
         self.ctx.live(agent, "working", {})
         reps, agent.arrived = agent.arrived, []
+        messages = agent.take_messages(self.ctx)  # news (e.g. "the facts page is up") also ends the wait
         self.ctx.event(agent, "wait", {"for": mode, "on": waiting_on, "got": [r["to"] for r in reps],
+                                       "message": bool(messages),
                                        "seconds": round(time.monotonic() - t0, 1),
                                        "still_out": [o["to"] for o in agent.outstanding.values()]})
-        return "\n\n".join(r["text"] for r in reps) + agent.outstanding_note()
+        return "\n\n".join([r["text"] for r in reps] + ([messages] if messages else [])) + agent.outstanding_note()
 
     # ---- direct communication ----
     def _check_contact(self, agent: "Agent", to: str) -> tuple["Agent", str]:
@@ -392,14 +398,22 @@ class Toolbox:
             return []
         names = [n.name for n in skipped_managers(sender.node, target.node)]
         for n in names:
-            ctx.inboxes[n].append(f"[cc] {sender.name} -> {target.name}: {text}")
+            self._post(n, f"[cc] {sender.name} -> {target.name}: {text}")
         return names
+
+    def _post(self, name: str, text: str, wake: bool = True) -> None:
+        """Put a note in an agent's inbox; by default it also wakes the agent if it is in `wait`."""
+        self.ctx.inboxes[name].append(text)
+        target = self.ctx.agents.get(name)
+        if wake and target is not None:
+            target.message_waiting = True
+            target.report_signal.set()
 
     async def _t_send_message(self, agent: "Agent", args: dict) -> str:
         ctx = self.ctx
         target, kind = self._check_contact(agent, args["to"])
         text = args["text"][:4000]
-        ctx.inboxes[target.name].append(f"[Message from {agent.name} ({agent.spec.role})]: {text}")
+        self._post(target.name, f"[Message from {agent.name} ({agent.spec.role})]: {text}")
         cc = self._cc(agent, target, text)
         ctx.event(agent, "message", {"to": target.name, "kind": kind, "chars": len(text), "cc": cc,
                                      "preview": text[:240]})
@@ -442,8 +456,8 @@ class Toolbox:
         ctx.budget.charge(cost)
         ctx.log_call(target, result, cost, -1, max_tokens, purpose="answer")
         answer = result.text.strip() or f"[{target.name} gave no answer]"
-        ctx.inboxes[target.name].append(
-            f"[FYI] In a side conversation, {agent.name} asked you: {question[:500]}\nYou answered: {answer[:800]}")
+        self._post(target.name, f"[FYI] In a side conversation, {agent.name} asked you: {question[:500]}\n"
+                                f"You answered: {answer[:800]}", wake=False)
         cc = self._cc(agent, target, f"Q: {question[:500]} / A: {answer[:500]}")
         ctx.event(agent, "ask", {"to": target.name, "kind": kind, "chars": len(question), "answer_chars": len(answer),
                                  "cc": cc, "preview": question[:240], "answer_preview": answer[:240]})
@@ -468,14 +482,14 @@ class Toolbox:
             if not pages:
                 return f"{inst.id} has no pages yet."
             return f"Pages in {inst.id}:\n" + "\n".join(
-                f"- {p.title} ({p.byline()}; {len(p.content)} chars)"
+                f"- \"{p.title}\": {p.byline()}; {len(p.content)} chars"
                 + (f" - last change: {p.current.summary}" if p.current.summary else "") for p in pages)
         page = store.find(inst.id, title)
         if page is None:
             raise ToolError(f"no page {title!r} in {inst.id}; call wiki_read without a page to list pages")
         self.ctx.event(agent, "wiki_read", {"wiki": inst.id, "page": page.title})
         people = ", ".join(f"{a} ({role})" for a, role, _ in page.contributors())
-        return f"# {page.title} ({page.byline()})\nContributors: {people}\n\n{truncate(page.content, MAX_READ)}"
+        return f"# {page.title}\n({page.byline()})\nContributors: {people}\n\n{truncate(page.content, MAX_READ)}"
 
     async def _t_wiki_search(self, agent, args) -> str:
         inst = self._wiki(agent, args["wiki"])
@@ -542,6 +556,7 @@ class Toolbox:
             raise ToolError("file too large")
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content)
+        agent.files_written += 1
         self.ctx.event(agent, "write", {"path": str(p.relative_to(self.ws)), "chars": len(content)})
         return f"Wrote {len(content)} chars to {p.relative_to(self.ws)}"
 

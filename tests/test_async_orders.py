@@ -106,10 +106,10 @@ def test_blocking_mode_returns_reports_from_delegate(tmp_path):
 
 def test_order_fields_may_run_ten_percent_over(tmp_path):
     ctx, root = _ctx(tmp_path)
-    ok = _call(ctx, root, "delegate", {"assignments": [_order("private-1", deliverables="d" * 860)]})
+    ok = _call(ctx, root, "delegate", {"assignments": [_order("private-1", deliverables="d" * 1300)]})
     assert not ok.is_error and ok.content.startswith("Orders sent")
-    bad = _call(ctx, root, "delegate", {"assignments": [_order("private-2", deliverables="d" * 900)]})
-    assert bad.is_error and "deliverables is 900 characters; keep it under 800" in bad.content
+    bad = _call(ctx, root, "delegate", {"assignments": [_order("private-2", deliverables="d" * 1400)]})
+    assert bad.is_error and "deliverables is 1400 characters; keep it under 1200" in bad.content
 
 
 def test_hitting_the_output_limit_without_a_tool_gets_a_specific_reminder(tmp_path):

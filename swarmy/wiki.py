@@ -119,8 +119,12 @@ class WikiStore:
         pages = self.pages.get(wiki_id, {})
         if title in pages:
             return pages[title]
-        low = title.strip().lower()
-        return next((p for t, p in pages.items() if t.lower() == low), None)
+        for cand in (title, re.sub(r"\s*\(v\d.*$", "", title.strip()).strip().strip('"\'')):
+            low = cand.strip().lower()
+            page = next((p for t, p in pages.items() if t.lower() == low), None)
+            if page is not None:
+                return page
+        return None
 
     def search(self, wiki_id: str, query: str) -> list[Page]:
         terms = set(tokenize(query))

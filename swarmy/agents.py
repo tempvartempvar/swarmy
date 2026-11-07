@@ -42,6 +42,9 @@ class Agent:
         self.arrived: list[dict] = []  # reports back from subordinates, not yet shown to this agent
         self.report_signal = asyncio.Event()  # set whenever a report arrives
         self.failure: BaseException | None = None  # a run-stopping error raised under one of its orders
+        self.message_waiting = False  # a message arrived that should wake this agent from `wait`
+        self.files_written = 0  # workspace files written during the current order
+        self.final_turn = False  # on its last turn: a submit is accepted as it is
         self.turns = 0  # model calls during the current assignment
 
     def max_turns(self, org: OrgConfig) -> int:
@@ -54,12 +57,19 @@ class Agent:
         for c in self.children:
             yield from c.walk()
 
+    def take_messages(self, ctx: "RunContext") -> str:
+        pending = ctx.inboxes.pop(self.name, [])
+        self.message_waiting = False
+        if not pending:
+            return ""
+        ctx.event(self, "inbox", {"count": len(pending)})
+        return "Messages received:\n" + "\n\n".join(pending)
+
     def _deliver_inbox(self, ctx: "RunContext") -> None:
         self.raise_failure()
-        pending = ctx.inboxes.pop(self.name, [])
-        if pending:
-            self.conv.add_user("Messages received:\n" + "\n\n".join(pending))
-            ctx.event(self, "inbox", {"count": len(pending)})
+        messages = self.take_messages(ctx)
+        if messages:
+            self.conv.add_user(messages)
         if self.arrived:  # reports that came back while this agent was busy
             reps, self.arrived = self.arrived, []
             self.conv.add_user("Reports received:\n\n" + "\n\n".join(r["text"] for r in reps) + self.outstanding_note())
@@ -99,7 +109,7 @@ class Agent:
     async def handle(self, text: str, ctx: "RunContext", order_id: int | None = None) -> dict:
         """Work on one assignment until `submit` (or a limit). Returns {report, answer, status}."""
         if order_id is None or order_id != self.current_order:  # a new order (a check-in continues the same one)
-            self.wiki_writes, self.reminded, self.status_warned = 0, False, False
+            self.wiki_writes, self.reminded, self.status_warned, self.files_written = 0, False, False, 0
             self.current_order_text = text
         self.current_order = order_id
         self.turns = 0
@@ -138,7 +148,7 @@ class Agent:
         if words and len(words) <= STATUS_WORDS:
             args["status"] = " ".join(words)
             return None
-        if not self.status_warned:
+        if not self.status_warned and not self.final_turn:
             self.status_warned = True
             got = f"yours has {len(words)} words" if words else "it is missing"
             return (f"Submission rejected: `status` must be a status update of at most {STATUS_WORDS} words for the "
@@ -156,9 +166,21 @@ class Agent:
 
         nudges, last_text, force_tool = 0, "", False
         limit = self.max_turns(ctx.org)
-        for turn in range(limit):
+        budget, turn = limit, -1
+        while turn + 1 < budget:
+            turn += 1
             self.turns = turn + 1
             self._deliver_inbox(ctx)
+            left = budget - turn
+            self.final_turn = left == 1
+            if left == 3 and limit > 4:
+                self.conv.add_user("You have 3 turns left for this order. Wrap up: "
+                                   + ("collect your outstanding reports with `wait`, then " if self.outstanding else "")
+                                   + "call `submit` with your report, saying what is unfinished.")
+            elif left == 1:
+                self.conv.add_user("This is your last turn for this order: call `submit` now with what you have"
+                                   + (" (reports from orders still out will be passed up with yours)" if self.outstanding else "")
+                                   + ", or the order ends as 'ran out of turns'.")
             max_tokens = ctx.budget.plan_call(self.model, self.conv.approx_input_tokens(), self.spec.output_cap())
             gate = ctx.registry.gate_for(self.model)
             queued = await gate.acquire()
@@ -244,6 +266,8 @@ class Agent:
                 else:
                     outputs[call.id] = await ctx.tools.execute(self, call, self.specs)
             self.conv.add_tool_results([outputs[c.id] for c in result.tool_calls])
+            if all(c.name == "wait" and not outputs[c.id].is_error for c in result.tool_calls) and budget < 2 * limit:
+                budget += 1  # waiting for reports doesn't use up the turn budget
             for c in result.tool_calls:
                 r = outputs[c.id]
                 ctx.transcript.write(node=self.name, kind="tool_result", tool=c.name, error=r.is_error,
@@ -261,7 +285,7 @@ class Agent:
     def _submit_problem(self, args: dict, ctx: "RunContext") -> str | None:
         """Why a submit can't be accepted yet (None if it can): bad arguments, the status rule, or the
         one-time reminder to record findings on a wiki first."""
-        if self.outstanding:
+        if self.outstanding and not self.final_turn:
             return (f"Submission rejected: some of your orders are still out ({self.outstanding_list()}). "
                     "Call `wait` to collect their reports first.")
         problem = validate_args(self.specs["submit"], {**args, "status": "x"}) or self._status_problem(args)
@@ -307,7 +331,9 @@ class Agent:
         return None
 
     def _should_remind(self, ctx: "RunContext") -> bool:
-        if self.reminded or self.wiki_writes or not ctx.org.knowledge.remind_before_submit:
+        # not on the last turn (it would cost the submission), and not when the results are already in files
+        if (self.reminded or self.wiki_writes or self.files_written or self.final_turn
+                or not ctx.org.knowledge.remind_before_submit):
             return False
         return any(can for _, can in ctx.wiki_access(self))
 

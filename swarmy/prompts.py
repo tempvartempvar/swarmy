@@ -91,8 +91,9 @@ def system_prompt(agent: "Agent", ctx: "RunContext") -> str:
             "- Split the work to fit your forces: give larger or harder parts to subordinates with bigger commands "
             "or stronger models, and let them proceed in parallel without overlapping.",
             "- Start everyone who can start now, in one `delegate` call. Don't hold a unit back until another one "
-            "finishes: if it needs someone else's results, have it begin with what it can do already (reading the "
-            "spec, scaffolding, test cases) and tell it which wiki page or file the inputs will appear in.",
+            "finishes: if it needs someone else's results, give it a preparatory order now (reading the spec, "
+            "scaffolding, test cases) and its real order once the inputs exist. An order that needs inputs that "
+            "don't exist yet gets done with guesses.",
         ]
         if org.orders.blocking:
             lines.append("- `delegate` returns when every subordinate in the call has reported back; all their reports "
@@ -169,6 +170,9 @@ def system_prompt(agent: "Agent", ctx: "RunContext") -> str:
         "## Ground rules",
         "- Be efficient: every message and tool call costs money. Do not duplicate work.",
         "- Always finish by calling `submit`. Plain-text replies are not delivered to anyone.",
+        f"- You have {agent.max_turns(org)} turns (model calls) per order"
+        + ("; turns spent only on `wait` don't count" if agent.children and not org.orders.blocking else "")
+        + ". You'll be told when 3 are left.",
     ]
     if lvl.prompt:
         lines += ["", "## Role notes", lvl.prompt.strip()]

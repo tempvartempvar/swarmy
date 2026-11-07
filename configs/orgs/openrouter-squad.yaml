@@ -1,5 +1,8 @@
 # A cheap, all-OpenRouter squad built for the greenhouse exercise (one OPENROUTER_API_KEY is all
-# you need). Every model here has providers that satisfy a Zero Data Retention account setting. Typical cost of one greenhouse run: a few cents to ~$0.30.
+# you need). Every model here has providers that satisfy a Zero Data Retention account setting.
+# Captains and soldiers run at medium reasoning effort, which bounds runaway reasoning (one
+# glm-flash call at the model's default effort took 220s and 12,000 output tokens).
+# Typical cost of one greenhouse run: a few cents to ~$0.30.
 #   swarmy run --org configs/orgs/openrouter-squad.yaml --task greenhouse --budget 1
 #   swarmy orders            # how the work was planned and handed out
 name: openrouter-squad
@@ -13,27 +16,30 @@ tree:
     - role: captain
       name: research-captain
       model: deepseek-flash
+      effort: medium
       goal: >-
         Every number the engineers need is found, checked against the Zone 3 layout (not other zones,
         future plans or superseded notes) and written to the orders wiki.
       children:
-        - {role: scout, model: gpt-oss-120b}
-        - {role: scout, model: glm-flash}
+        - {role: scout, model: gpt-oss-120b, effort: medium}
+        - {role: scout, model: glm-flash, effort: medium}
     - role: captain
       name: engineering-captain
       model: deepseek-flash
+      effort: medium
       goal: sim.py implements the documented physics exactly; controller.py is simple, readable and tunable.
       children:
-        - {role: sapper, model: gpt-oss-120b}
-        - {role: sapper, model: glm-flash}
+        - {role: sapper, model: gpt-oss-120b, effort: medium}
+        - {role: sapper, model: glm-flash, effort: medium}
     - role: captain
       name: test-captain
       model: glm-flash
+      effort: medium
       goal: >-
         Nothing is reported done until run_tests passes every criterion. Send failures back to
         engineering with the numbers, and keep TEST_REPORT.md up to date.
       children:
-        - {role: tester, model: gpt-oss-120b}
+        - {role: tester, model: gpt-oss-120b, effort: medium}
 knowledge:
   wikis:
     - name: orders
