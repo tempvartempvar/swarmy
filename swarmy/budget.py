@@ -39,10 +39,13 @@ class RunBudget:
             return desired_max_tokens
         affordable = int((remaining - in_cost) / out_rate)
         max_out = min(desired_max_tokens, affordable)
-        if max_out < MIN_OUTPUT:
+        # A call that asks for little output on purpose (an answer capped at 600 tokens) is fine; only a call
+        # that the remaining money squeezes below what it needs means the budget has run out.
+        floor = min(MIN_OUTPUT, desired_max_tokens)
+        if max_out < floor:
             raise RunBudgetExceeded(
                 f"run budget ${self.cap:.2f} exhausted (spent ${self.spent:.4f}; next {spec.alias} call needs "
-                f"~${in_cost + MIN_OUTPUT * out_rate:.4f})"
+                f"~${in_cost + floor * out_rate:.4f})"
             )
         return max_out
 

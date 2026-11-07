@@ -19,6 +19,17 @@ def test_run_budget_clamps_then_stops():
         b.plan_call(opus, 2000, 32000)
 
 
+def test_small_capped_calls_are_not_mistaken_for_an_empty_budget():
+    # Regression: answers capped at 600 tokens (below MIN_OUTPUT) ended a run with $0.49 of $0.50 left.
+    deepseek = Catalog.load(offline=True).resolve("deepseek-flash")
+    b = RunBudget(0.50)
+    b.charge(0.0114)
+    assert b.plan_call(deepseek, 4850, 600) == 600
+    b.charge(0.50 - 0.0114 - 0.0002)  # now genuinely nearly empty
+    with pytest.raises(RunBudgetExceeded):
+        b.plan_call(deepseek, 4850, 600)
+
+
 def test_free_model_never_clamped():
     free = Catalog.load(offline=True).resolve("gemma-free")
     assert RunBudget(0.0001).plan_call(free, 50_000, 8000) == 8000
