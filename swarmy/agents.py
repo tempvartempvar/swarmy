@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import time
+import traceback
 from typing import TYPE_CHECKING
 
 from .catalog import Catalog, ModelSpec, Price
 from .config import Node, NodeSettings, OrgConfig
 from .prompts import NUDGE, system_prompt
+from .errors import stops_run
 from .providers import ProviderError, ToolResult
 from .tools import tool_specs, validate_args
 
@@ -31,6 +34,7 @@ class Agent:
         self.current_order_text: str = ""  # its text (used to stop verbatim forwarding)
         self.wiki_writes = 0  # wiki edits during the current assignment
         self.reminded = False
+        self.turns = 0  # model calls during the current assignment
 
     def max_turns(self, org: OrgConfig) -> int:
         if self.spec.max_turns:
@@ -50,15 +54,29 @@ class Agent:
 
     async def handle(self, text: str, ctx: "RunContext", order_id: int | None = None) -> dict:
         """Work on one assignment until `submit` (or a limit). Returns {report, answer, status}."""
+        if order_id is None or order_id != self.current_order:  # a new order (a check-in continues the same one)
+            self.wiki_writes, self.reminded = 0, False
+            self.current_order_text = text
         self.current_order = order_id
-        self.current_order_text = text
-        self.wiki_writes, self.reminded = 0, False
+        self.turns = 0
         ctx.active.add(self.name)
         ctx.live(self, "working", {})
+        t0 = time.monotonic()
         try:
             result = await self._handle(text, ctx)
+        except Exception as e:
+            if stops_run(e):
+                raise
+            # A bug or unexpected response: report it to the commander instead of ending the whole run.
+            tb = "".join(traceback.format_exception(e))
+            ctx.event(self, "crash", {"where": "agent loop", "error": f"{type(e).__name__}: {e}"[:500],
+                                      "traceback": tb[-4000:]})
+            result = {"report": f"[{self.name} stopped: internal error {type(e).__name__}: {str(e)[:300]}]",
+                      "answer": None, "status": "error"}
         finally:
             ctx.active.discard(self.name)
+        ctx.event(self, "agent_done", {"order_id": order_id, "status": result["status"], "turns": self.turns,
+                                       "seconds": round(time.monotonic() - t0, 2)})
         ctx.live(self, "done", {"status": result["status"]})
         return result
 
@@ -72,7 +90,9 @@ class Agent:
         ctx.transcript.write(node=self.name, kind="input", text=text)
 
         nudges, last_text = 0, ""
-        for turn in range(self.max_turns(ctx.org)):
+        limit = self.max_turns(ctx.org)
+        for turn in range(limit):
+            self.turns = turn + 1
             self._deliver_inbox(ctx)
             max_tokens = ctx.budget.plan_call(self.model, self.conv.approx_input_tokens(), self.spec.output_cap())
             gate = ctx.registry.gate_for(self.model)
@@ -109,6 +129,7 @@ class Agent:
                     ctx.event(self, "nudge", {"stop": result.stop_reason})
                     self.conv.add_user(NUDGE)
                     continue
+                ctx.event(self, "gave_up", {"nudges": nudges, "stop": result.stop_reason})
                 return {"report": last_text or "[no report]", "answer": None, "status": "no_submit"}
 
             if result.stop_reason == "max_tokens":
@@ -147,7 +168,7 @@ class Agent:
                 return {"report": str(submission.get("report") or answer or ""),
                         "answer": None if answer is None else str(answer), "status": "submitted"}
 
-        ctx.event(self, "turn_limit", {})
+        ctx.event(self, "turn_limit", {"turns": limit})
         return {"report": f"[turn limit reached] {last_text}", "answer": None, "status": "turn_limit"}
 
 

@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS runs (
     cost_usd REAL, budget_cap REAL, n_calls INTEGER, input_tokens INTEGER, output_tokens INTEGER,
     cache_read_tokens INTEGER, cache_write_tokens INTEGER, reasoning_tokens INTEGER,
     wall_s REAL, llm_s REAL, rate_wait_s REAL, error TEXT, mock INTEGER,
-    started_at REAL, finished_at REAL
+    started_at REAL, finished_at REAL, end_reason TEXT, checkins INTEGER, crashes INTEGER
 );
 CREATE TABLE IF NOT EXISTS calls (
     id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT, node TEXT, level INTEGER, role TEXT,
@@ -53,10 +53,15 @@ class Tracer:
         self.conn = sqlite3.connect(self.path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
-        cols = {r[1] for r in self.conn.execute("PRAGMA table_info(calls)")}
-        if "purpose" not in cols:  # databases created by older versions
-            self.conn.execute("ALTER TABLE calls ADD COLUMN purpose TEXT")
-            self.conn.commit()
+        # databases created by older versions
+        added = {"calls": [("purpose", "TEXT")],
+                 "runs": [("end_reason", "TEXT"), ("checkins", "INTEGER"), ("crashes", "INTEGER")]}
+        for table, columns in added.items():
+            have = {r[1] for r in self.conn.execute(f"PRAGMA table_info({table})")}
+            for name, kind in columns:
+                if name not in have:
+                    self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {kind}")
+        self.conn.commit()
         self._lock = threading.Lock()
 
     def _exec(self, sql: str, args: tuple = ()) -> None:

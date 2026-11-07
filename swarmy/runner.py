@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import re
 import time
 import traceback
 from collections import Counter, defaultdict
@@ -16,7 +18,8 @@ from .budget import RunBudget, RunBudgetExceeded
 from .catalog import Catalog
 from .config import OrgConfig
 from .rules import WikiInstance, contacts, wiki_instances, wikis_for
-from .prompts import root_message
+from .prompts import checkin_message, checkin_reason, root_message
+from .runlog import close_run_log, describe_call, describe_event, explain_end, open_run_log
 from .providers import FatalProviderError, ProviderRegistry, StepResult
 from .tasks import TaskInstance
 from .tools import Toolbox
@@ -36,6 +39,7 @@ class RunContext:
     transcript: Transcript
     tools: Toolbox = None  # type: ignore[assignment]
     listener: Callable[[dict], None] | None = None  # live UI hook
+    log: logging.Logger | None = None  # runs/<run_id>/run.log
     wiki_dir: Path | None = None  # git repository for the wikis (run_one: runs/<run_id>/wiki)
     agents: dict[str, Agent] = field(default_factory=dict)
     wikis: list[WikiInstance] = field(default_factory=list)
@@ -73,6 +77,8 @@ class RunContext:
 
     def event(self, agent: Agent, kind: str, data: dict | None = None) -> None:
         self.tracer.log_event(self.run_id, agent.name, agent.level, kind, data)
+        if self.log:
+            self.log.log(*describe_event(agent.name, kind, data or {}))
         if self.listener:
             self.listener({"type": "event", "node": agent.name, "kind": kind, "data": data or {}, "t": time.time()})
 
@@ -101,6 +107,8 @@ class RunContext:
         self.totals["llm_s"] += r.latency_s
         self.totals["rate_wait_s"] += r.rate_wait_s
         self.per_node[agent.name]["cost"] += cost
+        if self.log:
+            self.log.log(*describe_call(agent.name, agent.model.alias, turn, r, cost, max_tokens))
         if self.listener:
             self.listener({"type": "call", "node": agent.name, "cost": cost, "purpose": purpose,
                            "total_cost": self.budget.spent, "t": time.time()})
@@ -120,6 +128,7 @@ async def run_one(
     rep: int = 0,
     listener: Callable[[dict], None] | None = None,
     on_start: Callable[[RunContext], None] | None = None,
+    echo: int | None = None,
 ) -> dict:
     run_id = new_id("run")
     run_dir = results_dir / "runs" / run_id
@@ -127,37 +136,76 @@ async def run_one(
     task.setup_workspace(workspace)
     root = build_tree(org, catalog, mock=registry.mock)
     transcript = Transcript(run_dir / "transcript.jsonl")
+    log = open_run_log(run_id, run_dir / "run.log", echo)
     ctx = RunContext(run_id=run_id, org=org, task=task, workspace=workspace, registry=registry,
                      budget=RunBudget(run_cap), tracer=tracer, transcript=transcript, listener=listener,
-                     wiki_dir=run_dir / "wiki")
+                     wiki_dir=run_dir / "wiki", log=log)
     ctx.tools = Toolbox(ctx)
     ctx.bind(root)
     if on_start:
         on_start(ctx)
 
     started, t0 = time.time(), time.monotonic()
-    status, error, submission, fatal = "completed", None, None, None
-    try:
-        ctx.event(root, "mission", {"order_id": 0, "to": root.name, "to_role": root.spec.role, "title": task.title,
-                                    "text": task.brief, "family": task.family})
-        async with asyncio.timeout(timeout_s):
-            submission = await root.handle(root_message(task), ctx, order_id=0)
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_s
+    rules = org.checkins
+    status, error, submission, fatal, checkins = "completed", None, None, None, 0
+    log.info("run %s: org %s (%s), task %s, budget %s, time limit %.0fs%s", run_id, org.name, org.shape,
+             task.task_id, "none" if run_cap is None else f"${run_cap:.2f}", timeout_s, " [MOCK]" if registry.mock else "")
+    for a in root.walk():
+        log.info("  %s%s (%s) on %s, effort %s, max %d turns", "  " * a.level, a.name, a.spec.role, a.model.alias,
+                 a.spec.effort or "default", a.max_turns(org))
+    log.info("check-ins: up to %d%s", rules.max, ", also when public tests fail" if rules.verify_tests else "")
+    ctx.event(root, "mission", {"order_id": 0, "to": root.name, "to_role": root.spec.role, "title": task.title,
+                                "text": task.brief, "family": task.family})
+    message = root_message(task)
+    while True:
+        try:
+            async with asyncio.timeout_at(deadline):
+                result = await root.handle(message, ctx, order_id=0)
+        except Exception as e:  # time limit, budget, endpoint refusal, or a bug outside the agents
+            st, err, fat = _classify(e, timeout_s)
+            if fat is None and submission is not None:  # a check-in round was cut short: keep the earlier report
+                ctx.event(root, "checkin_skipped", {"reason": f"check-in {checkins} was cut short: {err.splitlines()[0][:300]}"})
+                if st == "error":
+                    log.error("%s", err)
+                break
+            status, error, fatal = st, err, fat
+            break
+        submission = result
+        if result["status"] == "refused" or checkins >= rules.max:
+            break
+        tests = None
+        if rules.verify_tests and task.has_public_tests:
+            passed, tests = await asyncio.to_thread(_public_check, task, workspace)
+            if result["status"] == "submitted" and passed:
+                break
+        elif result["status"] == "submitted":
+            break
+        blocked = _checkin_blocked(ctx.budget, rules.min_budget_frac, deadline - loop.time(), timeout_s)
+        if blocked:
+            ctx.event(root, "checkin_skipped", {"reason": blocked})
+            break
+        checkins += 1
+        reason = checkin_reason(result)
+        ctx.event(root, "checkin", {"round": checkins, "max": rules.max, "status": result["status"], "reason": reason,
+                                    "report": result["report"][:4000], "tests": tests[:3000] if tests else None})
+        message = checkin_message(checkins, rules.max, reason, tests)
+        if org.memory == "fresh":  # the top position starts from a blank conversation: repeat the brief
+            message = root_message(task) + "\n\n---\n\n" + message
+    if submission is not None:
         ctx.event(root, "report", {"to": "client", "order_id": 0, "status": submission["status"],
                                    "text": submission["report"], "answer": submission.get("answer"),
-                                   "chars": len(submission["report"]), "preview": submission["report"][:240]})
-        if submission["status"] != "submitted":
+                                   "chars": len(submission["report"]), "preview": submission["report"][:240],
+                                   "checkins": checkins})
+        if status == "completed" and submission["status"] != "submitted":
             status = submission["status"]
-    except* RunBudgetExceeded as eg:
-        status, error = "budget_exhausted", str(eg.exceptions[0])
-    except* TimeoutError:
-        status, error = "timeout", f"exceeded {timeout_s}s"
-    except* FatalProviderError as eg:
-        status, error, fatal = "fatal", str(eg.exceptions[0]), eg.exceptions[0]
-    except* Exception as eg:
-        exc = eg.exceptions[0]
-        status = "error"
-        error = "".join(traceback.format_exception(exc))[-3000:]
+            if status == "error":
+                error = submission["report"]
     wall = time.monotonic() - t0
+    crashes = len(ctx.tracer.query("SELECT 1 FROM events WHERE run_id=? AND kind='crash'", (run_id,)))
+    end_reason = explain_end(status, error, root.name, submission["status"] if submission else None, checkins,
+                             run_cap, ctx.budget.spent, timeout_s)
 
     answer = submission.get("answer") if submission else None
     grade = await asyncio.to_thread(task.grade, answer, workspace)
@@ -181,6 +229,7 @@ async def run_one(
         "cache_read_tokens": tot["cache_read_tokens"], "cache_write_tokens": tot["cache_write_tokens"],
         "reasoning_tokens": tot["reasoning_tokens"], "wall_s": wall, "llm_s": tot["llm_s"],
         "rate_wait_s": tot["rate_wait_s"], "error": error, "mock": int(registry.mock),
+        "end_reason": end_reason, "checkins": checkins, "crashes": crashes,
         "started_at": started, "finished_at": time.time(),
     }
     tracer.save_run(row)
@@ -189,9 +238,17 @@ async def run_one(
                       **{k: round(v, 6) if isinstance(v, float) else v for k, v in ctx.per_node[a.name].items()}}
              for a in root.walk()}
     summary = {**{k: row[k] for k in ("run_id", "org_name", "task_id", "status", "score", "passed", "answer",
-                                     "cost_usd", "wall_s", "n_calls", "error")}, "mock": registry.mock,
+                                     "cost_usd", "wall_s", "n_calls", "error", "end_reason", "checkins",
+                                     "crashes")}, "mock": registry.mock,
                "grade": grade.details, "nodes": nodes, "run_dir": str(run_dir)}
     (run_dir / "result.json").write_text(json.dumps(summary, indent=2, default=str))
+    level = logging.INFO if status == "completed" else logging.WARNING
+    log.log(level, "run ended: %s. %s", status, end_reason)
+    log.log(level, "score %s, cost $%.4f, %.1fs, %d calls, %d check-ins, %d crashes", grade.score, ctx.budget.spent,
+            wall, tot["calls"], checkins, crashes)
+    if error and status in ("error", "fatal"):
+        log.debug("error detail:\n%s", error)
+    close_run_log(log)
     if fatal is not None:
         summary["fatal"] = fatal
     if listener:
@@ -199,3 +256,38 @@ async def run_one(
                   "t": time.time()})
     return summary
 
+
+def _leaves(e: BaseException):
+    if isinstance(e, BaseExceptionGroup):
+        for x in e.exceptions:
+            yield from _leaves(x)
+    else:
+        yield e
+
+
+def _classify(e: BaseException, timeout_s: float) -> tuple[str, str, FatalProviderError | None]:
+    """(status, error, fatal exception) for an exception that reached the top of the run."""
+    leaves = list(_leaves(e))
+    for x in leaves:
+        if isinstance(x, FatalProviderError):
+            return "fatal", str(x), x
+    for x in leaves:
+        if isinstance(x, RunBudgetExceeded):
+            return "budget_exhausted", str(x), None
+    if any(isinstance(x, TimeoutError) for x in leaves):
+        return "timeout", f"exceeded {timeout_s:.0f}s", None
+    return "error", "".join(traceback.format_exception(leaves[0]))[-3000:], None
+
+
+def _public_check(task: TaskInstance, workspace: Path) -> tuple[bool, str]:
+    """Run the task's public tests (the same ones agents can run): (all passed, output)."""
+    out = task.public_tests(workspace)
+    return not re.search(r"\b(FAIL|ERROR)\b", out), out
+
+
+def _checkin_blocked(budget: RunBudget, frac: float, time_left: float, timeout_s: float) -> str | None:
+    if budget.cap is not None and budget.cap - budget.spent < frac * budget.cap:
+        return f"only ${budget.cap - budget.spent:.4f} of the ${budget.cap:.2f} budget is left"
+    if time_left < frac * timeout_s:
+        return f"only {time_left:.0f}s of the {timeout_s:.0f}s time limit is left"
+    return None

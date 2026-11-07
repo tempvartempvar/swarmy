@@ -7,9 +7,11 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import traceback
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from .errors import stops_run
 from .prompts import assignment_message, question_message, system_prompt
 from .providers import ProviderError, ToolCall, ToolResult, ToolSpec
 from .rules import KIND_LABELS, relation, skipped_managers
@@ -208,6 +210,15 @@ class Toolbox:
         except ToolError as e:
             self.ctx.event(agent, "tool", {"name": call.name, "ok": False, "error": str(e)[:200]})
             return ToolResult(call.id, f"Error: {e}", True)
+        except Exception as e:
+            if stops_run(e):
+                raise
+            # e.g. reading a binary file, writing to a directory: tell the agent, log it, keep the run going
+            tb = "".join(traceback.format_exception(e))
+            self.ctx.event(agent, "crash", {"where": f"tool {call.name}", "error": f"{type(e).__name__}: {e}"[:500],
+                                            "traceback": tb[-4000:]})
+            self.ctx.event(agent, "tool", {"name": call.name, "ok": False, "error": f"internal error: {type(e).__name__}"})
+            return ToolResult(call.id, f"Error: {call.name} failed with {type(e).__name__}: {str(e)[:300]}", True)
 
     # ---- delegation ----
     def _order_from(self, agent: "Agent", a: dict) -> tuple[str, dict]:

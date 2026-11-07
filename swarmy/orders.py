@@ -10,20 +10,24 @@ from .tracing import Tracer
 
 def load_orders(tracer: Tracer, run_id: str, org_json: str | None = None) -> dict:
     evs = tracer.query("SELECT node, level, kind, data_json, ts FROM events WHERE run_id=? AND kind IN "
-                       "('mission', 'assign', 'report') ORDER BY id", (run_id,))
+                       "('mission', 'assign', 'report', 'checkin') ORDER BY id", (run_id,))
     run = tracer.query("SELECT org_json, task_id, status, score FROM runs WHERE run_id=?", (run_id,))
     t0 = evs[0]["ts"] if evs else 0.0
     orders: dict[int, dict] = {}
     for e in evs:
         d = json.loads(e["data_json"] or "{}")
+        t = round(e["ts"] - t0, 2)
+        if e["kind"] == "checkin" and 0 in orders:  # the client asked the top position to keep going
+            orders[0]["checkins"].append({"round": d.get("round"), "reason": d.get("reason"), "t": t,
+                                          "status": d.get("status"), "report": d.get("report"), "tests": d.get("tests")})
+            continue
         oid = d.get("order_id")
         if oid is None:
             continue
-        t = round(e["ts"] - t0, 2)
         if e["kind"] == "mission":
             orders[oid] = {"id": oid, "parent": None, "from": "client", "from_role": "client", "to": d.get("to"),
                            "to_role": d.get("to_role"), "level": 0, "title": d.get("title"), "text": d.get("text", ""),
-                           "round": 1, "t": t, "report": None}
+                           "round": 1, "t": t, "report": None, "checkins": []}
         elif e["kind"] == "assign":
             orders[oid] = {"id": oid, "parent": d.get("parent_order"), "from": e["node"],
                            "from_role": d.get("from_role"), "to": d.get("to"), "to_role": d.get("to_role"),

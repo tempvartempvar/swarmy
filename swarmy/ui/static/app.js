@@ -879,6 +879,11 @@ function runPanel() {
   if (S.customTask || !isPreset) out.push(field("Spec", text(cfg.task, (v) => (cfg.task = v), "r-spec", { placeholder: "e.g. code:n=8,coupling=0.5" })));
   out.push(field("Seed", num(cfg.seed, (v) => (cfg.seed = v || 1), "r-seed", { min: 1 })));
   out.push(field("Budget", num(cfg.budget, (v) => (cfg.budget = v || 0.1), "r-budget", { min: 0.01, step: 0.05 }), "hard cap in USD for this run"));
+  const ci = S.config.checkins = S.config.checkins || {};
+  out.push(field("Check-ins", num(ci.max ?? 2, (v) => mutate(() => (ci.max = Math.max(0, Math.min(10, v || 0)))), "r-checkins", { min: 0, max: 10 }),
+    `if ${titleCase(top)} stops before the mission is done, ask whether it's finished and push it to keep working (0 = never)`));
+  out.push(check("Also check in when the public tests still fail after it submits", ci.verify_tests !== false,
+    (v) => mutate(() => (ci.verify_tests = v)), null, "r-verify"));
   out.push(check("Mock models (no API calls)", cfg.mock, (v) => { cfg.mock = v; renderPanel(); }, null, "r-mock"));
   if (!cfg.mock) {
     const used = [...new Set(Object.values(S.idx).map((e) => modelEndpoint(e.node.model)))].filter(Boolean);
@@ -904,15 +909,19 @@ function runPanel() {
       out.push(h("div", { class: "result" },
         sm.score == null ? h("div", { class: "big" }, "Mission ", h("span", { class: sm.status === "completed" ? "pill-ok" : "pill-bad" }, sm.status === "completed" ? "reported back" : sm.status))
           : h("div", { class: "big" }, `score ${Number(sm.score).toFixed(2)} `, h("span", { class: sm.passed ? "pill-ok" : "pill-bad" }, sm.passed ? "PASS" : "not passed")),
-        h("div", { class: "small" }, `status ${sm.status} · ${money(sm.cost_usd)} · ${Number(sm.wall_s).toFixed(1)}s · ${sm.n_calls} calls`),
+        sm.end_reason ? h("div", { class: "end-reason " + (sm.status === "completed" ? "ok" : "bad") }, h("strong", {}, "Why it ended: "), sm.end_reason) : null,
+        sm.error && (sm.status === "error" || sm.status === "fatal") ? h("pre", { class: "small err-detail" }, sm.error.slice(-1500)) : null,
+        h("div", { class: "small" }, `status ${sm.status} · ${money(sm.cost_usd)} · ${Number(sm.wall_s).toFixed(1)}s · ${sm.n_calls} calls`,
+          sm.checkins ? ` · ${sm.checkins} check-in${sm.checkins > 1 ? "s" : ""}` : "", sm.crashes ? h("span", { class: "bad" }, ` · ${sm.crashes} crash${sm.crashes > 1 ? "es" : ""} contained`) : ""),
         sm.answer != null ? h("div", { class: "small" }, `answer: ${trunc(String(sm.answer), 120)}`) : null,
         sm.grade && sm.grade.files != null ? h("div", { class: "small" }, `${sm.grade.files} file(s) in the workspace`) : null,
         sm.grade && sm.grade.expected != null ? h("div", { class: "small" }, `expected: ${sm.grade.expected}`) : null,
-        h("div", { class: "small muted" }, `transcript: ${sm.run_dir}/transcript.jsonl`),
+        h("div", { class: "small muted" }, `log: ${sm.run_dir}/run.log · transcript: ${sm.run_dir}/transcript.jsonl`),
         h("div", { class: "row", style: "margin-top:6px" },
           h("button", { onclick: () => openExplorer("orders", r.run_id) }, "Chain of orders"),
           h("button", { onclick: () => openExplorer("files", r.run_id) }, "Files"),
-          h("button", { onclick: () => openExplorer("wikis", r.run_id) }, "Wikis"))));
+          h("button", { onclick: () => openExplorer("wikis", r.run_id) }, "Wikis"),
+          h("button", { onclick: () => openExplorer("log", r.run_id) }, "Log"))));
     }
     if (r.error) out.push(h("pre", { class: "small", style: "white-space:pre-wrap;color:var(--danger)" }, r.error));
     out.push(h("h3", {}, "Activity"));
@@ -940,6 +949,11 @@ function fmtEvent(ev) {
     case "nudge": return h("div", { class: "ev warn" }, `${who} replied without a tool call (nudged)`);
     case "turn_limit": return h("div", { class: "ev bad" }, `${who} hit the turn limit`);
     case "error": return h("div", { class: "ev bad" }, `${who}: ${d.error}`);
+    case "crash": return h("div", { class: "ev bad" }, `${who} hit an internal error in ${d.where} (contained): ${d.error}`);
+    case "checkin": return h("div", { class: "ev warn" }, `Check-in ${d.round}/${d.max} with ${who}: ${d.reason}`, pv(d.tests));
+    case "checkin_skipped": return h("div", { class: "ev warn" }, `No check-in: ${d.reason}`);
+    case "turn_limit": return h("div", { class: "ev warn" }, `${who} used all ${d.turns || ""} of its turns without submitting`);
+    case "gave_up": return h("div", { class: "ev warn" }, `${who} stopped calling tools without submitting`);
     case "refusal": return h("div", { class: "ev bad" }, `${who} declined`);
     case "undelivered": return h("div", { class: "ev warn" }, `${d.count} inbox message(s) never read`);
     case "tool": return d.ok ? null : h("div", { class: "ev warn" }, `${who}: ${d.name} failed: ${d.error}`);
@@ -1037,10 +1051,11 @@ const exRunInfo = () => (S.ex.list || []).find((r) => r.run_id === S.ex.run) || 
 async function loadExplorer(reset) {
   clearTimeout(S.ex.timer);
   const rid = S.ex.run;
-  if (reset) { S.ex.orders = S.ex.files = S.ex.file = null; S.wb.data = null; S.ex.sel = 0; }
+  if (reset) { S.ex.orders = S.ex.files = S.ex.file = S.ex.log = null; S.wb.data = null; S.ex.sel = 0; }
   if (rid) {
     try {
       if (S.ex.tab === "orders") S.ex.orders = await api(`/api/explorer/${rid}/orders`);
+      else if (S.ex.tab === "log") S.ex.log = await api(`/api/explorer/${rid}/log`);
       else if (S.ex.tab === "files") {
         S.ex.files = await api(`/api/explorer/${rid}/files`);
         if (S.ex.file && S.ex.files.files.some((f) => f.path === S.ex.file.path)) S.ex.file = await api(`/api/explorer/${rid}/file?path=${encodeURIComponent(S.ex.file.path)}`);
@@ -1064,6 +1079,7 @@ function renderExplorer() {
   $("#wb-role").hidden = S.ex.tab !== "wikis";
   if (!S.ex.run) { $("#ex-nav").replaceChildren(h("p", { class: "muted" }, "Nothing to show yet.")); $("#ex-main").replaceChildren(); return; }
   if (S.ex.tab === "orders") renderOrders();
+  else if (S.ex.tab === "log") renderLog();
   else if (S.ex.tab === "files") renderFiles();
   else renderWikiBrowser();
   if (S.ex.tab !== "orders" && exRunInfo().mock) $("#ex-main").prepend(mockBanner(true));
@@ -1123,12 +1139,49 @@ function renderOrders() {
       h("div", { class: "small" }, trunc(orderHeadline(c), 220)),
       c.fields && c.fields.done_when ? h("div", { class: "small muted" }, "Done when: " + trunc(c.fields.done_when, 140)) : null))));
   } else if (!o.report) out.push(h("p", { class: "muted small" }, "Still working on it."));
+  if (o.id === 0 && o.checkins && o.checkins.length) {
+    out.push(h("h3", {}, `Check-ins (${o.checkins.length})`));
+    o.checkins.forEach((c) => out.push(h("div", { class: "checkin" },
+      h("div", {}, h("strong", {}, `Check-in ${c.round} at ${c.t.toFixed(1)}s: `), c.reason),
+      c.report ? h("details", {}, h("summary", { class: "small" }, `${o.to}'s report before the check-in [${c.status}]`), mdView(c.html)) : null,
+      c.tests ? h("details", {}, h("summary", { class: "small" }, "Public test results it was shown"), h("pre", { class: "code small" }, c.tests)) : null)));
+  }
   if (o.report) {
     out.push(h("h3", {}, o.id === 0 ? `Final report to you (${o.report.status})` : `Report back to ${o.from} (${o.report.status}, at ${o.report.t.toFixed(1)}s)`));
     if (o.report.answer) out.push(h("p", {}, h("strong", {}, "Answer: "), o.report.answer));
     out.push(mdView(o.report.html));
   }
   main.replaceChildren(...out);
+}
+const LOG_LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR"];
+function renderLog() {
+  const data = S.ex.log, nav = $("#ex-nav"), main = $("#ex-main");
+  S.ex.logLevel = S.ex.logLevel || "INFO";
+  if (!data || !data.exists) {
+    nav.replaceChildren(h("p", { class: "muted" }, "No log for this run."));
+    main.replaceChildren(h("p", { class: "muted" }, "Runs from before run logs were added have none. Start a new run to get one."));
+    return;
+  }
+  const min = LOG_LEVELS.indexOf(S.ex.logLevel), entries = data.entries;
+  const count = (lv) => entries.filter((e) => e.level === lv).length;
+  const problems = entries.map((e, i) => [e, i]).filter(([e]) => e.level === "ERROR" || e.level === "WARNING");
+  nav.replaceChildren(...[
+    data.end_reason ? h("div", { class: "end-reason " + (data.status === "completed" ? "ok" : "bad") }, h("strong", {}, `${data.status}: `), data.end_reason)
+      : h("div", { class: "end-reason" }, "Still running…"),
+    h("div", { class: "small", style: "margin:8px 0" }, `${entries.length} entries · `, h("span", { class: "bad" }, `${count("ERROR")} errors`), ` · ${count("WARNING")} warnings`),
+    h("label", { class: "small" }, "Show ", select_(LOG_LEVELS.map((l) => ({ value: l, label: l === "DEBUG" ? "everything (every call)" : `${l} and above` })), S.ex.logLevel,
+      (v) => { S.ex.logLevel = v; renderLog(); }, "log-level")),
+    problems.length ? h("h3", {}, "Errors and warnings") : null,
+    ...problems.slice(-60).map(([e, i]) => h("button", { class: "wb-page", onclick: () => { const el = document.getElementById(`log-${i}`); if (el) { el.scrollIntoView({ block: "center" }); el.classList.add("flash"); setTimeout(() => el.classList.remove("flash"), 1200); } } },
+      h("div", { class: "t " + (e.level === "ERROR" ? "bad" : "") }, `${e.elapsed} ${e.level}`), h("div", { class: "m" }, trunc(e.text, 110)))),
+    h("p", { class: "small muted" }, data.path)].filter(Boolean));
+  const box = h("div", { class: "log" });
+  entries.forEach((e, i) => {
+    if (LOG_LEVELS.indexOf(e.level) < min) return;
+    box.append(h("div", { class: `log-line lv-${e.level}`, id: `log-${i}` }, h("span", { class: "lt" }, e.elapsed), h("span", { class: "ll" }, e.level), h("span", { class: "lx" }, e.text)));
+  });
+  main.replaceChildren(...[data.truncated ? h("p", { class: "small muted" }, "Showing the end of a long log.") : null, box].filter(Boolean));
+  if (S.ex.logFollow !== false && exRunInfo().status === "running") main.scrollTop = main.scrollHeight;
 }
 function renderFiles() {
   const data = S.ex.files, nav = $("#ex-nav"), main = $("#ex-main");

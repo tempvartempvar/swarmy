@@ -187,6 +187,7 @@ class AnthropicProvider(Provider):
             latency_s=latency,
             rate_wait_s=outcome.wait_s,
             retries=outcome.retries,
+            retry_errors=outcome.errors,
             served_model=getattr(msg, "model", spec.model) or spec.model,
             thinking="\n".join(thinking_parts),
             fallback=fallback or (getattr(msg, "model", spec.model) not in (spec.model, None)),

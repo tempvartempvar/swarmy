@@ -117,6 +117,9 @@ swarmy orders                 # how the Field Marshal planned and handed out the
 ```bash
 swarmy wiki                   # the facts the scouts recorded, and who wrote what
 ```
+```bash
+swarmy log                    # what happened, call by call, and why the run ended
+```
 
 Or, in the designer, open `openrouter-squad`, choose **Greenhouse controller** in the Manoeuvres tab,
 untick mock, and watch it in the run explorer. One run usually costs a few cents to about $0.30. To
@@ -324,6 +327,60 @@ orders:
 
 The run explorer's chain of orders shows each order's objective in the outline and its sections in
 full. The **Signals** tab in the designer has the same settings.
+
+### Check-ins
+
+When the top position stops before the mission is done, the client checks in with it, the way a
+real client would. It asks whether the mission is finished and tells it to keep working if not.
+Check-ins happen when the top position:
+
+- runs out of turns, stops calling tools, or is stopped by an error, without calling `submit`; or
+- submits while the task's public tests still fail. These are the same tests agents run with
+  `run_tests`, so check-ins never reveal the hidden grading cases.
+
+The check-in shows the reason and the current public test output. The top position keeps its
+conversation, gets a fresh set of turns, and can give its forces new orders. Their notes, the wikis
+and the workspace are all still there.
+
+```yaml
+checkins:
+  max: 2                  # 0 turns them off
+  verify_tests: true      # also check in when the public tests fail after a submit
+  min_budget_frac: 0.15   # only start one with at least 15% of the budget and time limit left
+```
+
+Check-ins are part of the setup you're measuring, so keep them the same across the structures you
+compare. A check-in cut short by the budget or time limit keeps the report the run already had.
+They're set in the Manoeuvres tab, and the chain of orders shows each one under the mission.
+
+### Run logs and why runs end
+
+Every run writes `runs/<run_id>/run.log`, a plain-text log with the time since the start, for
+debugging. It records:
+
+- every model call: tokens, cost, latency, stop reason, the tools it called, and any retries with
+  their reasons;
+- every order and report, wiki edit and message;
+- every failed tool call, provider error, and internal error with its traceback;
+- check-ins, and finally why the run ended, in plain words.
+
+You can read it in four places:
+
+- the explorer's **Log** tab, which jumps to errors and warnings and refreshes while the run is
+  live;
+- `swarmy log [RUN]` (add `--all` for every call);
+- live in the terminal with `swarmy run ... -v`, or `-vv` for every call;
+- the `swarmy ui` terminal, which prints one line when a run starts and ends.
+
+The end reason is also in `result.json` (`end_reason`), in the designer's result box, and in the
+`runs` table.
+
+Only two kinds of error end a run early: the endpoint refusing it (bad key, no credits, unknown
+model, data-policy mismatch) and the budget running out. Anything else is contained where it
+happens. A tool that hits an unexpected error (reading a binary file, writing to a directory)
+returns the error to the agent. An agent whose loop breaks reports the error to its commander, who
+can retry or reassign. Each of these is logged with its traceback and counted as a crash in the
+summary.
 
 ### Communication rules
 
@@ -582,6 +639,7 @@ broken down by task family.
 ```
 results/
   swarmy.db                       # sweeps, runs, calls, events (SQLite)
+  runs/<run_id>/run.log             # debug log: calls, retries, errors, check-ins, why the run ended
   runs/<run_id>/transcript.jsonl    # every input, step (text, thinking summary, tool calls) and tool result
   runs/<run_id>/workspace/          # final shared workspace
   runs/<run_id>/wiki/               # git repository: a folder per wiki, a file per page, a commit per edit

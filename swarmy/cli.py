@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 import sys
 from pathlib import Path
 
@@ -67,7 +68,8 @@ def cmd_run(args) -> int:
         tracer = Tracer(db)
         try:
             return await run_one(org, task, catalog=catalog, registry=registry, tracer=tracer, results_dir=results,
-                                 run_cap=args.budget, timeout_s=args.timeout)
+                                 run_cap=args.budget, timeout_s=args.timeout,
+                                 echo={0: None, 1: logging.INFO}.get(args.verbose, logging.DEBUG))
         finally:
             await registry.aclose()
             tracer.close()
@@ -75,17 +77,19 @@ def cmd_run(args) -> int:
     s = asyncio.run(go())
     score = "not graded" if s["score"] is None else f"{s['score']:.2f}"
     print(f"\nstatus {s['status']}  score {score}  {'PASS' if s['passed'] else ''}")
+    print(f"why it ended: {s['end_reason']}")
     print(f"cost ${s['cost_usd']:.4f}  wall {s['wall_s']:.1f}s  calls {s['n_calls']}")
     if s.get("answer") is not None:
         print(f"answer: {s['answer']}")
     if task.family == "qa":
         print(f"expected: {task.gold()['expected']}")
-    if s.get("error"):
+    if s.get("error") and s["status"] in ("error", "fatal"):
         print(f"error: {s['error'][-800:]}")
     print(f"\n{'node':28} {'model':16} {'calls':>5} {'cost':>9}")
     for name, n in s["nodes"].items():
         print(f"{'  ' * n['level'] + name:28} {n['model'][:16]:16} {n.get('calls', 0):>5} ${n.get('cost', 0):>8.4f}")
-    print(f"\ntranscript: {s['run_dir']}/transcript.jsonl")
+    print(f"\nlog:        {s['run_dir']}/run.log   (swarmy log {s['run_id']})")
+    print(f"transcript: {s['run_dir']}/transcript.jsonl")
     if task.family == "mission":
         print(f"workspace:  {s['run_dir']}/workspace   (orders: swarmy orders {s['run_id']})")
     return 0 if s["status"] != "fatal" else 2
@@ -287,6 +291,34 @@ def cmd_wiki(args) -> int:
     return 0
 
 
+def _run_dir(args) -> Path:
+    results, _ = _paths(args)
+    runs_dir = results / "runs"
+    if args.run in (None, "latest"):
+        found = sorted(runs_dir.glob("run_*/run.log"), key=lambda f: f.stat().st_mtime)
+        if not found:
+            raise SystemExit(f"no run logs under {runs_dir}")
+        return found[-1].parent
+    run_dir = runs_dir / args.run
+    if not run_dir.exists():
+        raise SystemExit(f"no run {args.run} under {runs_dir}")
+    return run_dir
+
+
+def cmd_log(args) -> int:
+    run_dir = _run_dir(args)
+    f = run_dir / "run.log"
+    if not f.exists():
+        raise SystemExit(f"{run_dir.name} has no run.log (it ran before run logs were added)")
+    keep = True
+    for line in f.read_text(encoding="utf-8", errors="replace").splitlines():
+        if line[:2].isdigit():  # a new entry; continuation lines follow their entry
+            keep = args.all or " DEBUG " not in line[:30]
+        if keep:
+            print(line)
+    return 0
+
+
 def cmd_ui(args) -> int:
     from .ui.server import serve
 
@@ -320,6 +352,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--budget", type=float, default=0.50, help="hard cap for this run in USD (default 0.50)")
     p.add_argument("--timeout", type=float, default=1200)
     p.add_argument("--mock", action="store_true", help="offline scripted models, no API calls")
+    p.add_argument("-v", "--verbose", action="count", default=0,
+                   help="print the run log as it happens (-v: orders, reports, errors; -vv: every call too)")
     _add_org_overrides(p)
     p.set_defaults(fn=cmd_run)
 
@@ -363,6 +397,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--wiki", help="only this wiki instance, e.g. unit-log/captain-1")
     p.add_argument("--page", help="print this page with its revision history")
     p.set_defaults(fn=cmd_wiki)
+
+    p = sub.add_parser("log", help="show a run's debug log: calls, errors, check-ins and why it ended")
+    p.add_argument("run", nargs="?", help="run id (default: latest)")
+    p.add_argument("--all", action="store_true", help="include DEBUG lines (every model call and tool call)")
+    p.set_defaults(fn=cmd_log)
 
     p = sub.add_parser("ui", help="open the interactive org designer in your browser")
     p.add_argument("--host", default="127.0.0.1")

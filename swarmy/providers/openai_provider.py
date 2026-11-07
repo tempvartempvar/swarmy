@@ -187,6 +187,7 @@ class OpenAICompatProvider(Provider):
             latency_s=latency,
             rate_wait_s=outcome.wait_s,
             retries=outcome.retries,
+            retry_errors=outcome.errors,
             served_model=data.get("model", spec.model),
             thinking=message.get("reasoning") or "",
         )

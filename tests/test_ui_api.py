@@ -142,6 +142,10 @@ def test_mission_run_and_explorer(server):
     assert page["revisions"][0]["role"] == "field-marshal"
     assert wikis["storage"] == "git" and page["revisions"][0]["html"].startswith("<") and page["revisions"][0]["diff"]
     assert by_id[0]["html"]["text"] and by_id[0]["report"]["html"]
+    status, log = call(f"/api/explorer/{rid}/log")
+    assert status == 200 and log["exists"] and log["end_reason"] and log["status"]
+    assert log["entries"][0]["level"] == "INFO" and any("run ended" in e["text"] for e in log["entries"])
+    assert {e["level"] for e in log["entries"]} <= {"DEBUG", "INFO", "WARNING", "ERROR"}
     status, files = call(f"/api/explorer/{rid}/files")
     assert status == 200 and "files" in files
     status, _ = call("/api/explorer/../../etc/orders")

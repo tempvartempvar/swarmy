@@ -166,6 +166,34 @@ def root_message(task) -> str:
     return f"Assignment from the client:\n\n{task.brief}"
 
 
+CHECKIN_REASONS = {
+    "turn_limit": "You used all of your turns without calling `submit`.",
+    "no_submit": "You stopped calling tools without calling `submit`.",
+    "error": "You were stopped by an error: {report}",
+    "submitted": "You submitted your report, but the public tests still fail.",
+}
+
+
+def checkin_reason(result: dict) -> str:
+    return CHECKIN_REASONS.get(result["status"], "You stopped ({status}).").format(
+        report=" ".join(str(result.get("report") or "").split())[:300], status=result["status"])
+
+
+def checkin_message(n: int, total: int, reason: str, tests: str | None) -> str:
+    """What the client says when the top position stops before the mission is done."""
+    lines = [f"Check-in from the client ({n} of {total}).", "", reason]
+    if tests:
+        lines += ["", "Public test results right now:", tests.strip()]
+    lines += ["", "Is the mission finished?",
+              "- If it is, call `submit` with your final report.",
+              "- If not, keep going: work out what is still missing, give your forces new orders (they keep "
+              "their notes, the wikis and the workspace), check the results, and call `submit` when the mission "
+              "is done."]
+    if n == total:
+        lines.append("This is the last check-in.")
+    return "\n".join(lines)
+
+
 def assignment_message(parent: "Agent", text: str) -> str:
     return f"Orders from {parent.name} ({parent.spec.role}):\n\n{text}"
 

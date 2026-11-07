@@ -33,6 +33,7 @@ EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"]
 # Rough output tokens per call by effort, for the cost hint only.
 TYPICAL_OUTPUT = {None: 1500, "low": 700, "medium": 1500, "high": 3000, "xhigh": 5000, "max": 8000}
 SAFE_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+LOG_LINE = re.compile(r"^(?P<time>\d\d:\d\d:\d\d) \+(?P<elapsed>\s*[\d.]+s) (?P<level>[A-Z]+)\s+(?P<text>.*)$")
 RUN_ID = re.compile(r"^run_[0-9]{8}-[0-9]{6}_[0-9a-f]{6}$")
 
 TASK_FAMILIES = [
@@ -232,6 +233,8 @@ class UIState:
         stores: dict = {}
 
         def on_start(ctx) -> None:
+            print(f"[swarmy] {ctx.run_id} started: {org.name}, {task.task_id}{', mock' if mock else ''}, "
+                  f"budget ${budget:.2f}. Log: {ctx.workspace.parent / 'run.log'}", flush=True)
             stores["wiki"] = ctx.wiki
             stores["workspace"] = ctx.workspace
             with self.lock:
@@ -266,10 +269,14 @@ class UIState:
                     tracer.close()
             try:
                 summary = asyncio.run(go())
+                print(f"[swarmy] {summary['run_id']} ({org.name}, {task.task_id}{', mock' if mock else ''}) ended: "
+                      f"{summary['status']}. {summary.get('end_reason') or ''}  Log: {summary['run_dir']}/run.log",
+                      flush=True)
                 with self.lock:
                     rec["summary"] = {k: v for k, v in summary.items() if k != "fatal"}
                     rec["status"] = "finished"
             except Exception as e:
+                print(f"[swarmy] run crashed before finishing: {e!r}\n{traceback.format_exc()[-1500:]}", flush=True)
                 with self.lock:
                     rec["status"], rec["error"] = "error", f"{e}\n{traceback.format_exc()[-1500:]}"
 
@@ -327,6 +334,8 @@ class UIState:
                 o["html"] = {"text": to_html(o["text"]), **{k: to_html(v) for k, v in (o.get("fields") or {}).items() if v}}
                 if o["report"]:
                     o["report"]["html"] = to_html(o["report"]["text"])
+                for c in o.get("checkins") or []:
+                    c["html"] = to_html(c.get("report"))
             return data
         finally:
             tracer.close()
@@ -353,6 +362,34 @@ class UIState:
         finally:
             tracer.close()
         return {"run_id": run_id, **data}
+
+    def explorer_log(self, run_id: str) -> dict:
+        """The run's debug log (runs/<run_id>/run.log) as entries, plus why the run ended."""
+        run_dir = self._run_dir(run_id)
+        f = run_dir / "run.log"
+        out: dict = {"run_id": run_id, "exists": f.exists(), "entries": [], "truncated": False, "path": str(f)}
+        result = run_dir / "result.json"
+        if result.exists():
+            try:
+                meta = json.loads(result.read_text())
+                out.update(status=meta.get("status"), end_reason=meta.get("end_reason"), error=meta.get("error"))
+            except ValueError:
+                pass
+        if not f.exists():
+            return out
+        raw = f.read_bytes()
+        if len(raw) > 2_000_000:
+            raw, out["truncated"] = raw[-2_000_000:], True
+        entries = out["entries"]
+        for line in raw.decode("utf-8", errors="replace").splitlines():
+            m = LOG_LINE.match(line)
+            if m:
+                entries.append({"time": m["time"], "elapsed": m["elapsed"].strip(), "level": m["level"], "text": m["text"]})
+            elif entries:
+                entries[-1]["text"] += "\n" + line
+        if len(entries) > 20000:
+            out["entries"], out["truncated"] = entries[-20000:], True
+        return out
 
     def explorer_files(self, run_id: str) -> dict:
         ws = self._run_dir(run_id) / "workspace"
@@ -430,7 +467,7 @@ def make_handler(state: UIState):
                     return self._json(state.models_json())
                 if path == "/api/explorer/runs":
                     return self._json(state.explorer_runs())
-                m = re.match(r"^/api/explorer/([^/]+)/(orders|wikis|files|file)$", path)
+                m = re.match(r"^/api/explorer/([^/]+)/(orders|wikis|files|file|log)$", path)
                 if m:
                     rid, what = m.groups()
                     if what == "file":

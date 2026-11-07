@@ -120,6 +120,21 @@ class CommunicationRules(BaseModel):
         return bool(any_rule and self.modes and self.max_messages)
 
 
+class CheckinRules(BaseModel):
+    """What the client does when the top position stops.
+
+    If it stops without submitting (turn limit, stopped calling tools, an error), or submits while
+    the task's public tests still fail (verify_tests), it is asked whether the mission is finished
+    and told to keep working if not, up to `max` times. A check-in only starts while at least
+    `min_budget_frac` of the run budget and of the time limit is left.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    max: int = Field(2, ge=0, le=10)
+    verify_tests: bool = True
+    min_budget_frac: float = Field(0.15, ge=0, le=1)
+
+
 class OrderRules(BaseModel):
     """How commanders must write orders.
 
@@ -175,6 +190,7 @@ class OrgConfig(BaseModel):
     knowledge: Knowledge = Knowledge()
     communication: CommunicationRules = CommunicationRules()
     orders: OrderRules = OrderRules()
+    checkins: CheckinRules = CheckinRules()
     memory: Literal["persistent", "fresh"] = "persistent"
     disclose_models: bool = True  # tell commanders which model each subordinate runs
     manager_max_turns: int = 12

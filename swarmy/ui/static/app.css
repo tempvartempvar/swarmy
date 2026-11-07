@@ -311,3 +311,20 @@ pre.code { background: var(--card); border: 1px solid var(--line); border-radius
 .ok { color: var(--ok); } .bad { color: var(--danger); }
 .mock-banner { border: 1px solid var(--warn); background: rgba(183, 121, 0, 0.1); border-radius: 8px; padding: 8px 12px; margin: 0 0 12px; font-size: 13px; }
 .mock-tag { background: var(--warn); color: #fff; border-radius: 4px; padding: 0 6px; font-size: 11px; font-weight: 700; }
+
+/* why a run ended, the run log, check-ins */
+.end-reason { padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); font-size: 13px; margin: 6px 0; }
+.end-reason.ok { border-color: var(--ok, #2f8f4e); }
+.end-reason.bad { border-color: var(--danger); }
+.err-detail { white-space: pre-wrap; color: var(--danger); max-height: 220px; overflow: auto; }
+.log { font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.log-line { display: grid; grid-template-columns: 64px 64px 1fr; gap: 8px; padding: 1px 4px; border-radius: 4px; }
+.log-line .lt, .log-line .ll { color: var(--muted); white-space: nowrap; }
+.log-line .lx { white-space: pre-wrap; word-break: break-word; }
+.log-line.lv-DEBUG .lx { color: var(--muted); }
+.log-line.lv-WARNING { background: color-mix(in srgb, #d9a400 12%, transparent); }
+.log-line.lv-ERROR { background: color-mix(in srgb, var(--danger) 14%, transparent); }
+.log-line.lv-ERROR .ll, .log-line.lv-WARNING .ll { color: inherit; font-weight: 600; }
+.log-line.flash { outline: 2px solid var(--accent); }
+.checkin { border-left: 3px solid #d9a400; padding: 4px 10px; margin: 6px 0; font-size: 13px; }
+.checkin details { margin-top: 4px; }

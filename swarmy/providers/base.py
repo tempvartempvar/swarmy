@@ -60,6 +60,7 @@ class StepResult:
     served_model: str = ""
     thinking: str = ""
     fallback: bool = False
+    retry_errors: list[str] = field(default_factory=list)  # why each retry happened
 
 
 PENDING_RESULT = "(still in progress - this is a side conversation, not the result)"
