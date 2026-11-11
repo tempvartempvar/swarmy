@@ -59,12 +59,22 @@ def test_every_edit_is_a_git_commit_and_reopens(tmp_path):
     assert len(log) == 3 and not log[0].gpgsig  # plus the initial commit; never signed with the user's key
     data = load(tmp_path)  # rebuilt from git alone
     page = data["instances"][0]["pages"][0]
-    assert data["storage"] == "git" and page["path"] == "orders/plan.md"
+    assert data["repo"] == str((tmp_path / "wiki").resolve()) and page["path"] == "orders/plan.md"
     r1, r2 = page["revisions"]
     assert (r1["author"], r1["role"], r1["level"], r1["summary"]) == ("colonel", "colonel", 0, "First plan")
     assert (r2["author"], r2["mode"], r2["summary"]) == ("private-1", "append", "")
     assert "<table>" in r1["html"] and "<script>" not in r1["html"] and "&lt;script&gt;" in r1["html"]
     assert r2["diff"][-2:] == ["+", "+more"]
+
+
+def test_a_run_without_pages_still_lists_its_wikis(tmp_path):
+    WikiStore(wiki_instances(_org()), tmp_path / "wiki").close()
+    data = load(tmp_path)  # the repository records the run's wikis, so the explorer can name them
+    assert [i["name"] for i in data["instances"]] == ["orders"] and not data["instances"][0]["pages"]
+    assert load(tmp_path / "missing") is None
+    (tmp_path / "stopped" / "wiki").mkdir(parents=True)
+    Repo.init(str(tmp_path / "stopped" / "wiki"))  # a run stopped before its first wiki commit
+    assert load(tmp_path / "stopped") is None
 
 
 def test_relative_repo_path(tmp_path, monkeypatch):

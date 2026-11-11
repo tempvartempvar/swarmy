@@ -52,7 +52,7 @@ def test_rejects_relayed_orders_and_missing_fields(tmp_path):
     r = _call(ctx, root, "delegate", {"assignments": [relay]})
     assert r.is_error and "verbatim" in r.content
     r = _call(ctx, root, "delegate", {"assignments": [{"to": "private-1", "task": "everything"}]})
-    assert r.is_error and "structured order" in r.content
+    assert r.is_error and "missing objective, deliverables, done_when" in r.content
     r = _call(ctx, root, "delegate", {"assignments": [{"to": "private-1", "objective": "x" * 900,
                                                         "deliverables": "y", "done_when": "z"}]})
     assert r.is_error and "under 500" in r.content

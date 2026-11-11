@@ -9,8 +9,7 @@ orgs:
   - generate:
       name: mix
       workers: 4
-      depths: [1, 2, 3]
-      include_solo: true
+      depths: [0, 1, 2, 3]     # 0: a single agent
       ladder:
         - {model: sonnet, effort: low}   # titles default to military ranks by depth
         - {model: haiku}

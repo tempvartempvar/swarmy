@@ -222,14 +222,8 @@ def cmd_orders(args) -> int:
     from .tracing import Tracer
 
     _, db = _paths(args)
-    tracer = Tracer(db)
-    run_id = args.run
-    if run_id in (None, "latest"):
-        rows = tracer.query("SELECT run_id FROM events WHERE kind='mission' ORDER BY id DESC LIMIT 1")
-        if not rows:
-            raise SystemExit("no runs with recorded orders yet")
-        run_id = rows[0]["run_id"]
-    data = load_orders(tracer, run_id)
+    run_id = _run_dir(args).name
+    data = load_orders(Tracer(db), run_id)
     print(f"run {run_id}  {data['task_id'] or ''}  [{data['status']}]\n")
     print(render(data, full=args.full))
     return 0
@@ -238,17 +232,9 @@ def cmd_orders(args) -> int:
 def cmd_wiki(args) -> int:
     from .wiki import load, render_markdown
 
-    results, _ = _paths(args)
-    runs_dir = results / "runs"
-    if args.run in (None, "latest"):
-        found = sorted(runs_dir.glob("run_*/result.json"), key=lambda f: f.stat().st_mtime)
-        if not found:
-            raise SystemExit(f"no runs under {runs_dir}")
-        run_dir = found[-1].parent
-    else:
-        run_dir = runs_dir / args.run
+    run_dir = _run_dir(args)
     data = load(run_dir)
-    if data is None:
+    if data is None or not any(i["pages"] for i in data["instances"]):
         from .tracing import Tracer
         from .wiki import activity
 
@@ -259,7 +245,7 @@ def cmd_wiki(args) -> int:
         for f in act["failed"][:10]:
             print(f"  {f['node']}: {f['tool']} failed: {f['error']}")
         return 1
-    print(f"run {run_dir.name}" + (f"  (git repository: {data['repo']})" if data.get("storage") == "git" else "") + "\n")
+    print(f"run {run_dir.name}  (git repository: {data['repo']})\n")
     for inst in data["instances"]:
         if args.wiki and inst["id"] != args.wiki:
             continue
@@ -279,19 +265,19 @@ def cmd_wiki(args) -> int:
         print()
     if not args.page:
         print("Show a page with: swarmy wiki RUN --page TITLE [--wiki ID]")
-        if data.get("storage") == "git":
-            print(f"Every edit is a git commit: git -C {data['repo']} log --format='%h %an: %s' -p")
+        print(f"Every edit is a git commit: git -C {data['repo']} log --format='%h %an: %s' -p")
     return 0
 
 
 def _run_dir(args) -> Path:
+    """The run named on the command line, or the latest one (run ids start with their start time)."""
     results, _ = _paths(args)
     runs_dir = results / "runs"
     if args.run in (None, "latest"):
-        found = sorted(runs_dir.glob("run_*/run.log"), key=lambda f: f.stat().st_mtime)
+        found = sorted(runs_dir.glob("run_*"), key=lambda d: d.name)
         if not found:
-            raise SystemExit(f"no run logs under {runs_dir}")
-        return found[-1].parent
+            raise SystemExit(f"no runs under {runs_dir}")
+        return found[-1]
     run_dir = runs_dir / args.run
     if not run_dir.exists():
         raise SystemExit(f"no run {args.run} under {runs_dir}")
@@ -302,7 +288,7 @@ def cmd_log(args) -> int:
     run_dir = _run_dir(args)
     f = run_dir / "run.log"
     if not f.exists():
-        raise SystemExit(f"{run_dir.name} has no run.log (it ran before run logs were added)")
+        raise SystemExit(f"{run_dir.name} has no run.log")
     keep = True
     for line in f.read_text(encoding="utf-8", errors="replace").splitlines():
         if line[:2].isdigit():  # a new entry; continuation lines follow their entry
@@ -383,12 +369,12 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(fn=cmd_task)
 
     p = sub.add_parser("orders", help="show how the mission cascaded down the chain of command")
-    p.add_argument("run", nargs="?", default="latest", help="run id (default: latest)")
+    p.add_argument("run", nargs="?", help="run id (default: latest)")
     p.add_argument("--full", action="store_true", help="print full order and report texts")
     p.set_defaults(fn=cmd_orders)
 
     p = sub.add_parser("wiki", help="browse the wikis a run produced, with who edited what")
-    p.add_argument("run", nargs="?", default="latest", help="run id (default: the latest run)")
+    p.add_argument("run", nargs="?", help="run id (default: latest)")
     p.add_argument("--wiki", help="only this wiki instance, e.g. unit-log/captain-1")
     p.add_argument("--page", help="print this page with its revision history")
     p.set_defaults(fn=cmd_wiki)

@@ -207,7 +207,7 @@ class WikiStore:
                         revs.append(d)
                     pages.append({"title": p.title, "path": p.path, "revisions": revs})
                 out.append({**m, "pages": pages})
-            return {"instances": out, "storage": "git", "repo": str(self.root)}
+            return {"instances": out, "repo": str(self.root)}
 
     # ---- reopening a finished run ----
     @classmethod
@@ -246,20 +246,27 @@ class WikiStore:
 
 
 def open_store(run_dir: Path) -> WikiStore | None:
+    """A finished run's wikis, or None if it has no readable wiki repository (none was made, or the run
+    was stopped before its first commit)."""
     root = run_dir / "wiki"
-    return WikiStore.open(root) if (root / ".git").exists() else None
+    if not (root / ".git").exists():
+        return None
+    try:
+        return WikiStore.open(root)
+    except KeyError:  # no HEAD yet, or no wiki metadata in it
+        return None
 
 
 def load(run_dir: Path) -> dict | None:
-    """All wikis of a finished run (every revision with its content, HTML and diff), or None."""
+    """All wikis of a finished run (every revision with its content, HTML and diff), or None if the
+    run has no wiki repository."""
     store = open_store(run_dir)
     if store is None:
         return None
     try:
-        data = store.to_json()
+        return store.to_json()
     finally:
         store.close()
-    return data if any(i["pages"] for i in data["instances"]) else None
 
 
 def unified_diff(old: str, new: str, version: int) -> list[str]:

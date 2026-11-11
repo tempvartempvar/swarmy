@@ -206,17 +206,9 @@ class UIState:
                 "est_round_cost": est_round, "unknown_models": sorted(unknown), "yaml": org.to_yaml()}
 
     def generate(self, body: dict) -> dict:
-        depth = int(body.get("depth", 2))
-        fields = {k: v for k, v in body.items() if k in GenerateSpec.model_fields and k not in ("depths", "include_solo")}
-        spec = GenerateSpec.model_validate({**fields, "depths": [max(depth, 1)], "include_solo": False})
-        if depth == 0:
-            top = spec.ladder[0]
-            org = OrgConfig.model_validate({"name": spec.name, "levels": [
-                {"role": top.role or SOLO_RANK, "model": top.model, "effort": top.effort}]})
-        else:
-            org = spec.build()[0]
-            org = org.model_copy(update={"name": spec.name})
-            org = OrgConfig.model_validate(org.model_dump(exclude_none=True))
+        fields = {k: v for k, v in body.items() if k in GenerateSpec.model_fields}
+        spec = GenerateSpec.model_validate({**fields, "depths": [max(0, int(body.get("depth", 2)))]})
+        org = OrgConfig.model_validate({**spec.build()[0].model_dump(exclude_none=True), "name": spec.name})
         return {"config": self.editable(org), "analysis": self.analyze_org(org)}
 
     # ---- runs ----
@@ -381,12 +373,6 @@ class UIState:
         tracer = Tracer(self.results_dir / "swarmy.db")
         try:
             data["activity"] = activity(tracer, run_id)
-            if not any(i["pages"] for i in data["instances"]):
-                row = tracer.query("SELECT org_json FROM runs WHERE run_id=?", (run_id,))
-                if row:
-                    from ..config import OrgConfig
-
-                    data["configured"] = [w.name for w in OrgConfig.model_validate_json(row[0]["org_json"]).knowledge.wikis]
         finally:
             tracer.close()
         return {"run_id": run_id, **data}

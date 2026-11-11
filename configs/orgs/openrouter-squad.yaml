@@ -54,7 +54,6 @@ communication:
   cross_team: true      # captains coordinate directly; testers and sappers can talk to each other
   skip_up: 1
   cc_skipped: true
-  modes: [ask, message]
   max_messages: 10
 manager_max_turns: 16
 worker_max_turns: 30

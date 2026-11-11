@@ -211,7 +211,6 @@ communication:
   skip_up: 1           # up to N ranks above one's own commander
   skip_down: 0         # officers: up to N ranks below their direct subordinates
   cc_skipped: true     # skipped officers get a copy
-  modes: [ask, message]
   max_messages: 8      # per agent per run
   max_message_chars: 1500
   max_question_chars: 800
@@ -241,7 +240,8 @@ checkins:
 When an agent's context passes `max_tokens`, older tool output, messages, reports and the content
 of old tool calls (files it wrote) are cut to a short stub. Its orders and last `keep_turns` turns
 stay intact. Trimming happens in one go, to about 60% of the limit, so prompt caching keeps working
-between trims.
+between trims. A trim also drops the model's earlier reasoning, which Claude and OpenRouter only
+accept on an unedited history.
 
 ```yaml
 context: {max_tokens: 30000, keep_turns: 4, trim_to: 400}
@@ -351,8 +351,7 @@ orgs:
   - generate:              # same soldiers, different depths
       name: army
       workers: 8
-      depths: [1, 2, 3]
-      include_solo: true   # plus a single-agent baseline
+      depths: [0, 1, 2, 3]   # 0 = a single agent (the baseline)
       ladder: [{model: sonnet}, {model: haiku}]   # officer tiers, top down
       worker: {model: gpt-oss-120b}
 tasks:

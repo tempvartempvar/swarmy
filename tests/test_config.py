@@ -53,7 +53,7 @@ def test_balanced_spans(workers, depth, expected):
 
 
 def test_generate_removes_middle_tiers_first():
-    spec = GenerateSpec(name="corp", workers=8, depths=[1, 2, 3, 4], include_solo=True,
+    spec = GenerateSpec(name="corp", workers=8, depths=[0, 1, 2, 3, 4],
                         ladder=[{"role": "ceo", "model": "opus"}, {"role": "c-suite", "model": "opus"},
                                 {"role": "director", "model": "sonnet"}, {"role": "manager", "model": "haiku"}],
                         worker={"model": "gpt-oss-120b"})
@@ -84,7 +84,7 @@ def test_catalog_shorthand_and_costs():
 def test_default_titles_are_military_ranks():
     from swarmy.ranks import management_ranks
 
-    spec = GenerateSpec(name="g", workers=8, depths=[1, 2, 4], include_solo=True, ladder=[{"model": "sonnet"}],
+    spec = GenerateSpec(name="g", workers=8, depths=[0, 1, 2, 4], ladder=[{"model": "sonnet"}],
                         worker={"model": "haiku"})
     orgs = {o.name: [lv.role for lv in o.levels] for o in spec.build()}
     assert orgs["g-solo"] == ["lone-wolf"]

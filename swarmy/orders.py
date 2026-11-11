@@ -5,13 +5,14 @@ from __future__ import annotations
 
 import json
 
+from .config import org_from_json
 from .tracing import Tracer
 
 
 def load_orders(tracer: Tracer, run_id: str, org_json: str | None = None) -> dict:
     evs = tracer.query("SELECT node, level, kind, data_json, ts FROM events WHERE run_id=? AND kind IN "
                        "('mission', 'assign', 'report', 'checkin') ORDER BY id", (run_id,))
-    run = tracer.query("SELECT org_json, task_id, status, score FROM runs WHERE run_id=?", (run_id,))
+    run = tracer.query("SELECT org_json, task_id, status, score, mock FROM runs WHERE run_id=?", (run_id,))
     t0 = evs[0]["ts"] if evs else 0.0
     orders: dict[int, dict] = {}
     for e in evs:
@@ -36,21 +37,12 @@ def load_orders(tracer: Tracer, run_id: str, org_json: str | None = None) -> dic
         elif e["kind"] == "report" and oid in orders:
             orders[oid]["report"] = {"status": d.get("status"), "text": d.get("text", d.get("preview", "")),
                                      "answer": d.get("answer"), "t": t, "status_line": d.get("status_line")}
-    goals = {}
-    org_json = org_json or (run[0]["org_json"] if run else None)
-    if org_json:
-        try:
-            from .config import OrgConfig
-
-            org = OrgConfig.model_validate_json(org_json)
-            goals = {n.name: n.settings.goal for n in org.nodes() if n.settings.goal}
-        except Exception:
-            pass
     meta = run[0] if run else {}
-    mock = tracer.query("SELECT mock FROM runs WHERE run_id=?", (run_id,))
+    org = org_from_json(org_json or meta.get("org_json"))
+    goals = {n.name: n.settings.goal for n in org.nodes() if n.settings.goal} if org else {}
     return {"run_id": run_id, "orders": sorted(orders.values(), key=lambda o: o["id"]), "goals": goals,
             "task_id": meta.get("task_id"), "status": meta.get("status") or "running", "score": meta.get("score"),
-            "mock": bool(mock and mock[0]["mock"])}
+            "mock": bool(meta.get("mock"))}
 
 
 def render(data: dict, full: bool = False, width: int = 110) -> str:

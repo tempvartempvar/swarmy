@@ -83,6 +83,11 @@ def test_generate_and_yaml_roundtrip(server):
     assert g["analysis"]["layers"] == ["field-marshal", "colonel", "captain", "private"]
     status, y = call("/api/yaml", {"yaml": g["analysis"]["yaml"]})
     assert status == 200 and y["analysis"]["metrics"]["shape"] == "1-2-4-8"
+    status, solo = call("/api/generate", {"name": "g", "workers": 8, "depth": 0,
+                                           "ladder": [{"model": "sonnet", "effort": "low", "goal": "Ship it."}],
+                                           "worker": {"model": "gpt-oss-120b"}})
+    assert status == 200 and solo["analysis"]["metrics"]["shape"] == "1" and solo["config"]["name"] == "g"
+    assert solo["config"]["tree"]["goal"] == "Ship it."  # the lone agent keeps the top template's settings
 
 
 def test_mock_run_with_live_state(server):
@@ -150,7 +155,7 @@ def test_mission_run_and_explorer(server):
     assert status == 200 and {i["id"] for i in wikis["instances"]} >= {"orders", "unit-log/engineer-colonel"}
     page = next(p for i in wikis["instances"] if i["id"] == "orders" for p in i["pages"] if p["title"] == "Plan")
     assert page["revisions"][0]["role"] == "field-marshal"
-    assert wikis["storage"] == "git" and page["revisions"][0]["html"].startswith("<") and page["revisions"][0]["diff"]
+    assert wikis["repo"] and page["revisions"][0]["html"].startswith("<") and page["revisions"][0]["diff"]
     assert by_id[0]["html"]["text"] and by_id[0]["report"]["html"]
     status, log = call(f"/api/explorer/{rid}/log")
     assert status == 200 and log["exists"] and log["end_reason"] and log["status"]

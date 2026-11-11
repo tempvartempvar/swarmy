@@ -23,17 +23,16 @@ from .base import (
     Retryable,
     StepResult,
     ToolCall,
-    clip_args,
-    clip_text,
     ToolResult,
     ToolSpec,
     Usage,
+    clip_args,
+    clip_text,
     with_retries,
 )
 
-EFFORT_OPENAI = {"low": "low", "medium": "medium", "high": "high", "xhigh": "high", "max": "high"}
+EFFORT = {"low": "low", "medium": "medium", "high": "high", "xhigh": "high", "max": "high"}
 FINISH_MAP = {"stop": "end_turn", "tool_calls": "tool_use", "length": "max_tokens", "content_filter": "refusal"}
-EFFORT_MAP = {"low": "low", "medium": "medium", "high": "high", "xhigh": "high", "max": "high"}
 
 
 class OpenAIConversation(Conversation):
@@ -105,9 +104,15 @@ class OpenAIConversation(Conversation):
                     calls.append({**tc, "function": fn})
                 if calls:
                     m["tool_calls"] = calls
-        self.chars = (len(self.system) + sum(len(t.description) + len(str(t.parameters)) for t in self.tool_specs)
-                      + sum(len(json.dumps(m)) for m in self.messages[1:]))
+        if self._measure() < before:  # the history was edited, so replayed reasoning is no longer valid
+            for m in self.messages:
+                m.pop("reasoning_details", None)
+        self.chars = self._measure()
         return max(0, before - self.chars)
+
+    def _measure(self) -> int:
+        return (len(self.system) + sum(len(t.description) + len(str(t.parameters)) for t in self.tool_specs)
+                + sum(len(json.dumps(m)) for m in self.messages[1:]))
 
 
 class OpenAICompatProvider(Provider):
@@ -143,9 +148,9 @@ class OpenAICompatProvider(Provider):
             body.update(ep.tools_extra_body)
         if effort and spec.supports_reasoning is not False:
             if ep.effort_style == "openrouter":
-                body["reasoning"] = {"effort": EFFORT_MAP.get(effort, "medium")}
+                body["reasoning"] = {"effort": EFFORT.get(effort, "medium")}
             elif ep.effort_style == "openai":
-                body["reasoning_effort"] = EFFORT_OPENAI.get(effort, "medium")
+                body["reasoning_effort"] = EFFORT.get(effort, "medium")
 
         async def call():
             try:

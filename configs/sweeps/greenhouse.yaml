@@ -9,8 +9,7 @@ orgs:
   - generate:
       name: or
       workers: 4
-      depths: [1]
-      include_solo: true
+      depths: [0, 1]           # 0: a single agent
       ladder: [{model: haiku-or, effort: medium}]
       worker: {model: gpt-oss-120b}
   - path: configs/orgs/openrouter-squad.yaml

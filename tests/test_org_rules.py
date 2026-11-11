@@ -161,7 +161,7 @@ def test_prompt_lists_wikis_and_contacts(tmp_path):
     from swarmy.tracing import Transcript
 
     org = _levels_org(knowledge={"wikis": [{"name": "handbook", "write": "managers"}]},
-                      communication={"chain": True, "skip_up": 1, "modes": ["ask"]})
+                      communication={"chain": True, "skip_up": 1})
     root = build_tree(org, Catalog.load(offline=True))
     ctx = RunContext(run_id="r", org=org, task=make_task("qa", {}, 1), workspace=tmp_path,
                      registry=ProviderRegistry(mock=True), budget=RunBudget(1), tracer=Tracer(tmp_path / "db"),
@@ -172,7 +172,7 @@ def test_prompt_lists_wikis_and_contacts(tmp_path):
     assert "`handbook` (whole organization; read only)" in prompt
     assert "director-1 (director): skip-level" in prompt and "manager-1.1 (manager): your manager" in prompt
     names = {s.name for s in tool_specs(worker, ctx)}
-    assert {"ask", "wiki_read", "wiki_search"} <= names and "send_message" not in names and "wiki_write" not in names
+    assert {"ask", "send_message", "wiki_read", "wiki_search"} <= names and "wiki_write" not in names
     ask = next(s for s in tool_specs(worker, ctx) if s.name == "ask")
     assert set(ask.parameters["properties"]["to"]["enum"]) == {"manager-1.1", "director-1"}
 
@@ -180,3 +180,26 @@ def test_prompt_lists_wikis_and_contacts(tmp_path):
 def test_example_orgs_with_knowledge_load():
     for f in sorted((CONFIG_DIR / "orgs").glob("*.yaml")):
         load_org(f)
+
+
+def test_runs_saved_by_older_versions_still_open(tmp_path):
+    # Every run stores its org config. Options removed since then must not make old runs unreadable.
+    import json
+
+    from swarmy.analysis import _layer_roles
+    from swarmy.config import org_from_json
+    from swarmy.orders import load_orders
+
+    org = load_org(CONFIG_DIR / "orgs" / "general-staff.yaml")
+    old = json.loads(org.model_dump_json())
+    old.update(memory="persistent", disclose_models=True)
+    old["orders"].update(format="structured", blocking=False)
+    old["knowledge"]["remind_before_submit"] = True
+    old["knowledge"]["wikis"][0]["oversight"] = True
+    old["communication"]["modes"] = ["ask", "message"]
+    assert org_from_json(json.dumps(old)).shape == org.shape
+    assert org_from_json(json.dumps({"name": "not an org"})) is None
+    tracer = Tracer(tmp_path / "db")
+    tracer.save_run({"run_id": "r1", "org_json": json.dumps(old), "status": "completed"})
+    assert "field-marshal" in load_orders(tracer, "r1")["goals"]
+    assert _layer_roles(json.dumps(old)) == org.layer_roles()

@@ -40,5 +40,4 @@ communication:
   peers: true
   skip_up: 1
   cc_skipped: true
-  modes: [ask, message]
   max_messages: 6

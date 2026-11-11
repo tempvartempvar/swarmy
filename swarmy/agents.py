@@ -11,9 +11,10 @@ from typing import TYPE_CHECKING
 
 from .catalog import Catalog, ModelSpec, Price
 from .config import Node, NodeSettings, OrgConfig
-from .prompts import NUDGE, system_prompt
 from .errors import stops_run
-from .providers import ProviderError, ToolResult
+from .prompts import NUDGE, system_prompt
+from .providers import ProviderError, StepResult, ToolCall, ToolResult
+from .providers.base import clip_args
 from .tools import LIMIT_GRACE, STATUS_FALLBACK, STATUS_WORDS, tool_specs, validate_args
 
 if TYPE_CHECKING:
@@ -33,20 +34,19 @@ class Agent:
         self.children: list[Agent] = []
         self.conv = None
         self.specs: dict = {}
-        self.current_order: int | None = None  # id of the order being worked on
-        self.current_order_text: str = ""  # its text (used to stop verbatim forwarding)
-        self.wiki_writes = 0  # wiki edits during the current assignment
-        self.reminded = False
-        self.status_warned = False  # told once per order to give a short status
-        self.report_warned = False  # told once per order to shorten an over-long report
+        # the order it is working on
+        self.current_order: int | None = None
+        self.current_order_text = ""  # its text (used to stop verbatim forwarding)
+        self.turns = 0  # model calls on it so far
+        self.final_turn = False  # on its last turn: a submit is accepted as it is
+        self.warned: set[str] = set()  # one-time submit warnings already given: status, report, wiki
+        self.recorded = False  # wrote a wiki page or a workspace file for it
+        # the orders it has out
         self.outstanding: dict[int, dict] = {}  # order id -> {"to", "task"} for orders still being worked on
         self.arrived: list[dict] = []  # reports back from subordinates, not yet shown to this agent
-        self.report_signal = asyncio.Event()  # set whenever a report arrives
-        self.failure: BaseException | None = None  # a run-stopping error raised under one of its orders
+        self.report_signal = asyncio.Event()  # set whenever a report or a message arrives
         self.message_waiting = False  # a message arrived that should wake this agent from `wait`
-        self.files_written = 0  # workspace files written during the current order
-        self.final_turn = False  # on its last turn: a submit is accepted as it is
-        self.turns = 0  # model calls during the current assignment
+        self.failure: BaseException | None = None  # a run-stopping error raised under one of its orders
 
     def max_turns(self, org: OrgConfig) -> int:
         if self.spec.max_turns:
@@ -107,12 +107,11 @@ class Agent:
             return ""
         return "\n\nReports from my subordinates that came back after I stopped:\n\n" + "\n\n".join(r["text"] for r in reps)
 
+    # ---- working on an order ----
     async def handle(self, text: str, ctx: "RunContext", order_id: int | None = None) -> dict:
-        """Work on one assignment until `submit` (or a limit). Returns {report, answer, status}."""
+        """Work on one assignment until `submit` (or a limit). Returns {report, answer, status, status_line}."""
         if order_id is None or order_id != self.current_order:  # a new order (a check-in continues the same one)
-            self.wiki_writes, self.reminded, self.status_warned, self.files_written = 0, False, False, 0
-            self.report_warned = False
-            self.current_order_text = text
+            self.warned, self.recorded, self.current_order_text = set(), False, text
         self.current_order = order_id
         self.turns = 0
         ctx.active.add(self.name)
@@ -131,8 +130,7 @@ class Agent:
             tb = "".join(traceback.format_exception(e))
             ctx.event(self, "crash", {"where": "agent loop", "error": f"{type(e).__name__}: {e}"[:500],
                                       "traceback": tb[-4000:]})
-            result = {"report": f"[{self.name} stopped: internal error {type(e).__name__}: {str(e)[:300]}]",
-                      "answer": None, "status": "error"}
+            result = _result(f"[{self.name} stopped: internal error {type(e).__name__}: {str(e)[:300]}]", "error")
         finally:
             ctx.active.discard(self.name)
         if self.outstanding or self.arrived:
@@ -142,20 +140,6 @@ class Agent:
                                        "seconds": round(time.monotonic() - t0, 2), "status_line": result["status_line"]})
         ctx.live(self, "done", {"status": result["status"], "line": result["status_line"]})
         return result
-
-    def _status_problem(self, args: dict) -> str | None:
-        """Check the submit `status` (at most STATUS_WORDS words). Rejects once per order with an example;
-        after that it keeps the first words, so a cosmetic field never blocks the work."""
-        words = str(args.get("status") or "").split()
-        if words and len(words) <= STATUS_WORDS:
-            args["status"] = " ".join(words)
-            return None
-        if not self.status_warned and not self.final_turn:
-            self.status_warned = True
-            got = f"yours has {len(words)} words" if words else "it is missing"
-            return (f"Submission rejected: `status` must be a status update of at most {STATUS_WORDS} words for the "
-                    f"org chart ({got}), e.g. 'Simulator matches all sample cases'. Call submit again with it.")
-        args["status"] = " ".join(words[:STATUS_WORDS]) or "Done"
 
     async def _handle(self, text: str, ctx: "RunContext") -> dict:
         provider = ctx.registry.provider_for(self.model)
@@ -174,80 +158,33 @@ class Agent:
             self.turns = turn + 1
             self._deliver_inbox(ctx)
             self._trim_context(ctx)
-            left = budget - turn
-            self.final_turn = left == 1
-            if left == 3 and limit > 4:
-                self.conv.add_user("You have 3 turns left for this order. Wrap up: "
-                                   + ("collect your outstanding reports with `wait`, then " if self.outstanding else "")
-                                   + "call `submit` with your report, saying what is unfinished.")
-            elif left == 1:
-                self.conv.add_user("This is your last turn for this order: call `submit` now with what you have"
-                                   + (" (reports from orders still out will be passed up with yours)" if self.outstanding else "")
-                                   + ", or the order ends as 'ran out of turns'.")
-            max_tokens = ctx.budget.plan_call(self.model, self.conv.approx_input_tokens(), self.spec.output_cap())
-            gate = ctx.registry.gate_for(self.model)
-            queued = await gate.acquire()
-            ctx.live(self, "thinking", {})
+            self._turns_left(budget - turn, limit)
             try:
-                # after a reminder, OpenAI-compatible endpoints are told a tool call is required
-                choice = "required" if force_tool and self.model.kind == "openai" else None
-                try:
-                    result = await provider.step(self.conv, self.model, max_tokens=max_tokens, effort=self.spec.effort,
-                                                 tool_choice=choice)
-                except ProviderError:
-                    if choice is None:
-                        raise
-                    result = await provider.step(self.conv, self.model, max_tokens=max_tokens, effort=self.spec.effort)
+                result, max_tokens = await self._step(ctx, provider, turn, force_tool)
             except ProviderError as e:
                 ctx.event(self, "error", {"error": str(e)[:500]})
                 ctx.transcript.write(node=self.name, kind="error", error=str(e))
-                return {"report": f"[{self.name} could not continue: provider error: {e}]", "answer": None,
-                        "status": "error"}
-            finally:
-                gate.release()
-            result.rate_wait_s += queued
-            cost = self.model.cost(result.usage)
-            ctx.budget.charge(cost)
-            ctx.log_call(self, result, cost, turn, max_tokens)
-            ctx.live(self, "working", {"tools": [c.name for c in result.tool_calls]})
-            ctx.transcript.write(
-                node=self.name, kind="step", turn=turn, text=result.text, thinking=result.thinking[:4000],
-                tool_calls=[{"name": c.name, "args": _clip(c.arguments)} for c in result.tool_calls],
-                stop=result.stop_reason, cost=round(cost, 6),
-            )
-            if result.text:
-                last_text = result.text
+                return _result(f"[{self.name} could not continue: provider error: {e}]", "error")
+            last_text = result.text or last_text
             if result.stop_reason == "refusal":
                 ctx.event(self, "refusal", {})
-                return {"report": f"[{self.name} declined the request]", "answer": None, "status": "refused"}
+                return _result(f"[{self.name} declined the request]", "refused")
 
-            if not result.tool_calls:
+            if not result.tool_calls:  # plain text: a submit written as text, or a reminder to use tools
                 salvaged = self._salvage_submit(result.text)
+                problem = None if salvaged is None else self._submit_problem(salvaged, ctx)
                 if salvaged is not None:
-                    problem = self._submit_problem(salvaged, ctx)
                     ctx.event(self, "salvaged", {"tool": "submit", "accepted": problem is None,
                                                  "problem": (problem or "")[:300]})
                     if problem is None:
-                        return {"report": str(salvaged.get("report") or salvaged.get("answer") or ""),
-                                "answer": None if salvaged.get("answer") is None else str(salvaged["answer"]),
-                                "status": "submitted", "status_line": salvaged["status"]}
-                if nudges < MAX_NUDGES:
-                    nudges += 1
-                    force_tool = True
-                    ctx.event(self, "nudge", {"stop": result.stop_reason})
-                    if salvaged is not None:
-                        note = (f"Your submission was written as text, so it was not delivered: {problem} "
-                                "Call the `submit` tool itself (a tool call, not text).")
-                    elif result.stop_reason == "max_tokens":
-                        note = (f"Your reply hit the output limit ({max_tokens} tokens) before you called a tool, so "
-                                "nothing happened. Keep your reasoning short and act now: call one tool. Write long "
-                                "content to files in parts if needed.")
-                    else:
-                        note = NUDGE
-                    self.conv.add_user(note)
-                    continue
-                ctx.event(self, "gave_up", {"nudges": nudges, "stop": result.stop_reason})
-                return {"report": last_text or "[no report]", "answer": None, "status": "no_submit"}
+                        return _submitted(salvaged)
+                if nudges >= MAX_NUDGES:
+                    ctx.event(self, "gave_up", {"nudges": nudges, "stop": result.stop_reason})
+                    return _result(last_text or "[no report]", "no_submit")
+                nudges, force_tool = nudges + 1, True
+                ctx.event(self, "nudge", {"stop": result.stop_reason})
+                self.conv.add_user(_nudge(salvaged, problem, result.stop_reason, max_tokens))
+                continue
 
             force_tool = False
             if result.stop_reason == "max_tokens":
@@ -255,35 +192,76 @@ class Agent:
                     ToolResult(c.id, "Not executed: your response hit the output-token limit. Retry with a "
                                      "shorter response.", True) for c in result.tool_calls])
                 continue
-
-            outputs: dict[str, ToolResult] = {}
-            submission = None
-            for call in sorted(result.tool_calls, key=lambda c: c.name == "submit"):
-                if call.name == "submit" and call.error is None and "submit" in self.specs:
-                    problem = self._submit_problem(call.arguments, ctx)
-                    if problem:
-                        outputs[call.id] = ToolResult(call.id, problem, not problem.startswith("Not submitted yet"))
-                    else:
-                        submission = call.arguments
-                        outputs[call.id] = ToolResult(call.id, "Submitted.")
-                else:
-                    outputs[call.id] = await ctx.tools.execute(self, call, self.specs)
-            self.conv.add_tool_results([outputs[c.id] for c in result.tool_calls])
-            if all(c.name == "wait" and not outputs[c.id].is_error for c in result.tool_calls) and budget < 2 * limit:
-                budget += 1  # waiting for reports doesn't use up the turn budget
-            for c in result.tool_calls:
-                r = outputs[c.id]
-                ctx.transcript.write(node=self.name, kind="tool_result", tool=c.name, error=r.is_error,
-                                     content=r.content[:3000])
+            submission, only_waited = await self._run_tools(result.tool_calls, ctx)
             if submission is not None:
-                answer = submission.get("answer")
-                return {"report": str(submission.get("report") or answer or ""),
-                        "answer": None if answer is None else str(answer), "status": "submitted",
-                        "status_line": submission["status"]}
+                return _submitted(submission)
+            if only_waited and budget < 2 * limit:
+                budget += 1  # waiting for reports doesn't use up the turn budget
 
         ctx.event(self, "turn_limit", {"turns": limit})
-        return {"report": f"[turn limit reached] {last_text}", "answer": None, "status": "turn_limit"}
+        return _result(f"[turn limit reached] {last_text}", "turn_limit")
 
+    def _turns_left(self, left: int, limit: int) -> None:
+        self.final_turn = left == 1
+        if left == 3 and limit > 4:
+            self.conv.add_user("You have 3 turns left for this order. Wrap up: "
+                               + ("collect your outstanding reports with `wait`, then " if self.outstanding else "")
+                               + "call `submit` with your report, saying what is unfinished.")
+        elif left == 1:
+            self.conv.add_user("This is your last turn for this order: call `submit` now with what you have"
+                               + (" (reports from orders still out will be passed up with yours)" if self.outstanding else "")
+                               + ", or the order ends as 'ran out of turns'.")
+
+    async def _step(self, ctx: "RunContext", provider, turn: int, force_tool: bool) -> tuple[StepResult, int]:
+        """One model call: budgeted, rate-limited, charged and logged. Returns (result, max_tokens)."""
+        max_tokens = ctx.budget.plan_call(self.model, self.conv.approx_input_tokens(), self.spec.output_cap())
+        gate = ctx.registry.gate_for(self.model)
+        queued = await gate.acquire()
+        ctx.live(self, "thinking", {})
+        try:
+            # after a reminder, OpenAI-compatible endpoints are told a tool call is required
+            choice = "required" if force_tool and self.model.kind == "openai" else None
+            try:
+                result = await provider.step(self.conv, self.model, max_tokens=max_tokens, effort=self.spec.effort,
+                                             tool_choice=choice)
+            except ProviderError:
+                if choice is None:
+                    raise
+                result = await provider.step(self.conv, self.model, max_tokens=max_tokens, effort=self.spec.effort)
+        finally:
+            gate.release()
+        result.rate_wait_s += queued
+        cost = self.model.cost(result.usage)
+        ctx.budget.charge(cost)
+        ctx.log_call(self, result, cost, turn, max_tokens)
+        ctx.live(self, "working", {"tools": [c.name for c in result.tool_calls]})
+        ctx.transcript.write(
+            node=self.name, kind="step", turn=turn, text=result.text, thinking=result.thinking[:4000],
+            tool_calls=[{"name": c.name, "args": clip_args(c.arguments, 1500)} for c in result.tool_calls],
+            stop=result.stop_reason, cost=round(cost, 6),
+        )
+        return result, max_tokens
+
+    async def _run_tools(self, calls: list[ToolCall], ctx: "RunContext") -> tuple[dict | None, bool]:
+        """Run one turn's tool calls, submit last. Returns (the accepted submit's arguments or None,
+        whether the turn only waited for reports)."""
+        outputs: dict[str, ToolResult] = {}
+        submission = None
+        for call in sorted(calls, key=lambda c: c.name == "submit"):
+            if call.name == "submit" and call.error is None and "submit" in self.specs:
+                problem = self._submit_problem(call.arguments, ctx)
+                if problem:
+                    outputs[call.id] = ToolResult(call.id, problem, not problem.startswith("Not submitted yet"))
+                else:
+                    submission = call.arguments
+                    outputs[call.id] = ToolResult(call.id, "Submitted.")
+            else:
+                outputs[call.id] = await ctx.tools.execute(self, call, self.specs)
+        self.conv.add_tool_results([outputs[c.id] for c in calls])
+        for c in calls:
+            ctx.transcript.write(node=self.name, kind="tool_result", tool=c.name, error=outputs[c.id].is_error,
+                                 content=outputs[c.id].content[:3000])
+        return submission, all(c.name == "wait" and not outputs[c.id].is_error for c in calls)
 
     def _trim_context(self, ctx: "RunContext") -> None:
         """Over the context budget: clip older material, keeping fewer recent turns intact if needed, down
@@ -301,22 +279,11 @@ class Agent:
         if saved:
             ctx.event(self, "trimmed", {"before": before, "after": self.conv.approx_input_tokens(), "kept_turns": keep})
 
-    def _report_problem(self, args: dict, ctx: "RunContext") -> str | None:
-        """Reports have a length limit too: rejected once per order with advice, then cut to the limit."""
-        limit = ctx.org.orders.max_report_chars
-        report = str(args.get("report") or "")
-        if len(report) <= limit * LIMIT_GRACE:
-            return None
-        if not self.report_warned and not self.final_turn:
-            self.report_warned = True
-            return (f"Submission rejected: your report is {len(report)} characters; keep it under {limit}. Report "
-                    "results, decisions and open issues; put details in a file or wiki page and point to it.")
-        args["report"] = report[:limit] + f"\n[... {len(report) - limit} characters cut: over the report limit]"
-        return None
-
+    # ---- submitting ----
     def _submit_problem(self, args: dict, ctx: "RunContext") -> str | None:
-        """Why a submit can't be accepted yet (None if it can): bad arguments, the status rule, or the
-        one-time reminder to record findings on a wiki first."""
+        """Why a submit can't be accepted yet (None if it can): orders still out, bad arguments, the status
+        or report rule, or the one-time reminder to record findings on a wiki first. On the last turn only
+        bad arguments stop it."""
         if self.outstanding and not self.final_turn:
             return (f"Submission rejected: some of your orders are still out ({self.outstanding_list()}). "
                     "Call `wait` to collect their reports first.")
@@ -325,7 +292,7 @@ class Agent:
         if problem:
             return f"Submission rejected: {problem}"
         if self._should_remind(ctx):
-            self.reminded = True
+            self.warned.add("wiki")
             ctx.event(self, "wiki_reminder", {})
             writable = [w.id for w, can in ctx.wiki_access(self) if can]
             return ("Not submitted yet. Your report only reaches your commander. If your work produced facts, "
@@ -333,6 +300,45 @@ class Agent:
                     f"them on the right topic page first ({', '.join(writable)}). Then call submit again; it will "
                     "be accepted.")
         return None
+
+    def _warn_once(self, rule: str) -> bool:
+        """True the first time `rule` is broken on this order (not on the last turn: it would cost the submit)."""
+        if rule in self.warned or self.final_turn:
+            return False
+        self.warned.add(rule)
+        return True
+
+    def _status_problem(self, args: dict) -> str | None:
+        """The `status` is at most STATUS_WORDS words. Rejected once per order with an example; after that the
+        first words are kept, so a cosmetic field never blocks the work."""
+        words = str(args.get("status") or "").split()
+        if words and len(words) <= STATUS_WORDS:
+            args["status"] = " ".join(words)
+            return None
+        if self._warn_once("status"):
+            got = f"yours has {len(words)} words" if words else "it is missing"
+            return (f"`status` must be a status update of at most {STATUS_WORDS} words for the org chart ({got}), "
+                    "e.g. 'Simulator matches all sample cases'. Call submit again with it.")
+        args["status"] = " ".join(words[:STATUS_WORDS]) or "Done"
+        return None
+
+    def _report_problem(self, args: dict, ctx: "RunContext") -> str | None:
+        """Reports have a length limit too: rejected once per order with advice, then cut to the limit."""
+        limit = ctx.org.orders.max_report_chars
+        report = str(args.get("report") or "")
+        if len(report) <= limit * LIMIT_GRACE:
+            return None
+        if self._warn_once("report"):
+            return (f"your report is {len(report)} characters; keep it under {limit}. Report results, decisions "
+                    "and open issues; put details in a file or wiki page and point to it.")
+        args["report"] = report[:limit] + f"\n[... {len(report) - limit} characters cut: over the report limit]"
+        return None
+
+    def _should_remind(self, ctx: "RunContext") -> bool:
+        # not when the results are already in a file or on a wiki, and only once per order
+        if self.recorded or "wiki" in self.warned or self.final_turn:
+            return False
+        return any(can for _, can in ctx.wiki_access(self))
 
     def _salvage_submit(self, text: str) -> dict | None:
         """Some models (gpt-oss, for one) sometimes write the submit call as text, e.g.
@@ -363,19 +369,27 @@ class Agent:
             return None  # the first JSON object in the text isn't a submit: leave it
         return None
 
-    def _should_remind(self, ctx: "RunContext") -> bool:
-        # not on the last turn (it would cost the submission), and not when the results are already in files
-        if self.reminded or self.wiki_writes or self.files_written or self.final_turn:
-            return False
-        return any(can for _, can in ctx.wiki_access(self))
+
+def _result(report: str, status: str) -> dict:
+    return {"report": report, "answer": None, "status": status}
 
 
-def _clip(args: dict, n: int = 1500) -> dict:
-    out = {}
-    for k, v in args.items():
-        s = v if isinstance(v, str) else repr(v)
-        out[k] = s if len(s) <= n else s[:n] + f"... [{len(s) - n} more chars]"
-    return out
+def _submitted(args: dict) -> dict:
+    answer = args.get("answer")
+    return {"report": str(args.get("report") or answer or ""), "answer": None if answer is None else str(answer),
+            "status": "submitted", "status_line": args["status"]}
+
+
+def _nudge(salvaged: dict | None, problem: str | None, stop_reason: str, max_tokens: int) -> str:
+    """What to tell an agent that replied in plain text."""
+    if salvaged is not None:
+        return (f"Your submission was written as text, so it was not delivered: {problem} "
+                "Call the `submit` tool itself (a tool call, not text).")
+    if stop_reason == "max_tokens":
+        return (f"Your reply hit the output limit ({max_tokens} tokens) before you called a tool, so nothing "
+                "happened. Keep your reasoning short and act now: call one tool. Write long content to files in "
+                "parts if needed.")
+    return NUDGE
 
 
 def build_tree(org: OrgConfig, catalog: Catalog, mock: bool = False) -> Agent:

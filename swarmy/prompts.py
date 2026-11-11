@@ -22,10 +22,6 @@ def org_shape_line(ctx: "RunContext") -> str:
     return f"{len(org.layers)} level(s): {tiers}"
 
 
-def _reports_line(agent: "Agent", ctx: "RunContext") -> str:
-    return f"- Your direct subordinates: {', '.join(c.name for c in agent.children)} (details under 'Your forces')."
-
-
 def _forces(agent: "Agent", ctx: "RunContext") -> list[str]:
     """What each direct subordinate brings, so commanders can assign work to fit their resources."""
     lines = ["", "## Your forces"]
@@ -58,7 +54,8 @@ def system_prompt(agent: "Agent", ctx: "RunContext") -> str:
     else:
         lines.append(f"- You report to {agent.parent.name} ({agent.parent.spec.role}).")
     if is_manager:
-        lines.append(_reports_line(agent, ctx))
+        lines.append(f"- Your direct subordinates: {', '.join(c.name for c in agent.children)} (details under "
+                     "'Your forces').")
     else:
         lines.append("- You have no direct reports: you do the hands-on work yourself.")
     if lvl.goal:
@@ -157,12 +154,8 @@ def system_prompt(agent: "Agent", ctx: "RunContext") -> str:
             by_kind = Counter(contacts.values())
             lines.append("- You may contact " + ", ".join(f"{n} {KIND_LABELS[k]}" for k, n in by_kind.items())
                          + ". The tools list every allowed name.")
-        tools = []
-        if "ask" in c.modes:
-            tools.append("`ask` sends a question and returns their answer")
-        if "message" in c.modes:
-            tools.append("`send_message` drops a note in their inbox, which they see the next time they act")
-        lines.append(f"- {'; '.join(tools)}. You may send at most {c.max_messages} in total.")
+        lines.append("- `ask` sends a question and returns their answer; `send_message` drops a note in their "
+                     f"inbox, which they see the next time they act. You may send at most {c.max_messages} in total.")
         if c.cc_skipped and (c.skip_up or c.skip_down or c.open):
             lines.append("- Skip-level messages are copied to the managers in between.")
 

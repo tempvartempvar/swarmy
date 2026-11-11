@@ -841,11 +841,7 @@ function commPanel() {
     "orders to a commander can't name the people under it; it decides who does what", "o-micro"));
   out.push(check("Reject orders that relay the commander's own orders verbatim", o.no_forwarding !== false, (v) => updO("no_forwarding", v),
     "also stops pasting orders into wikis", "o-fwd"));
-  out.push(h("h3", {}, "How"));
-  const modes = c.modes || ["ask", "message"];
-  const setMode = (mode, on) => upd("modes", on ? [...new Set([...modes, mode])] : modes.filter((x) => x !== mode));
-  out.push(check("Ask", modes.includes("ask"), (v) => setMode("ask", v), "question and answer; the recipient answers from what they know so far", "c-ask"));
-  out.push(check("Message", modes.includes("message"), (v) => setMode("message", v), "a note they see the next time they act", "c-msg"));
+  out.push(h("h3", {}, "Limits"));
   out.push(field("Limit", num(c.max_messages ?? 8, (v) => upd("max_messages", v ?? 0), "c-max", { min: 0 }), "messages per agent per run"));
   out.push(field("Message length", num(c.max_message_chars ?? 1500, (v) => upd("max_message_chars", v || 1500), "c-msg-len", { min: 100, step: 100 }), "max characters per message"));
   out.push(field("Question length", num(c.max_question_chars ?? 800, (v) => upd("max_question_chars", v || 800), "c-q-len", { min: 100, step: 100 }), "max characters per question"));
@@ -1397,15 +1393,14 @@ function renderWikiBrowser() {
   nav.replaceChildren(...navItems);
   if (!insts.some((i) => i.pages.length)) {
     const a = data.activity || { reads: 0, writes: 0, failed: [], reminders: 0 };
-    const configured = data.configured || insts.map((i) => i.name);
+    const names = [...new Set(insts.map((i) => i.name))];
     main.replaceChildren(...[
       h("h2", { style: "margin:0 0 6px" }, "No wiki pages were written"),
-      configured.length ? h("p", {}, `This org has ${configured.length} wiki${configured.length > 1 ? "s" : ""} (${[...new Set(configured)].join(", ")}), but no agent saved a page.`)
+      names.length ? h("p", {}, `This org has ${names.length} wiki${names.length > 1 ? "s" : ""} (${names.join(", ")}), but no agent saved a page.`)
         : h("p", {}, "This org has no wikis. Add one in the Wikis tab of the designer."),
       h("p", {}, `Wiki activity: ${a.reads} read${a.reads === 1 ? "" : "s"}, ${a.writes} write${a.writes === 1 ? "" : "s"}, ${a.failed.length} failed call${a.failed.length === 1 ? "" : "s"}, ${a.reminders} submit reminder${a.reminders === 1 ? "" : "s"}.`),
       a.failed.length ? h("div", {}, h("h3", {}, "Failed wiki calls"),
         h("ul", {}, a.failed.slice(0, 20).map((f) => h("li", { class: "small" }, h("strong", {}, f.node), `: ${f.tool}: ${f.error}`)))) : null,
-      h("p", { class: "small muted" }, "Runs from before this version didn't log rejected calls, and didn't remind agents to record findings before reporting. Start a new run to see both."),
     ].filter(Boolean));
     return;
   }
@@ -1421,7 +1416,7 @@ function renderWikiBrowser() {
     h("h2", { style: "margin:0" }, page.title),
     h("div", { class: "wb-meta" },
       h("div", {}, h("code", {}, inst.id), ` · ${inst.label} · ${revs.length} revision${revs.length > 1 ? "s" : ""}`,
-        data.storage === "git" ? h("span", { class: "muted small", title: `Every edit is a git commit. Browse with: git -C ${data.repo} log -p -- ${page.path}` }, ` · git: ${page.path} @ ${cur.sha.slice(0, 7)}`) : null),
+        h("span", { class: "muted small", title: `Every edit is a git commit. Browse with: git -C ${data.repo} log -p -- ${page.path}` }, ` · git: ${page.path} @ ${cur.sha.slice(0, 7)}`)),
       h("div", {}, `Last edited at ${cur.t.toFixed(1)}s by `, author(cur), cur.summary ? h("span", {}, ` · “${cur.summary}”`) : null),
       h("div", {}, "Contributors: ", Object.values(people).map(({ r, n }, i) => [i ? ", " : "", h("strong", {}, r.author), " ", rankBadge(r.role), h("span", { class: "muted small" }, ` ×${n}`)]))),
     h("div", { class: "wb-tabs" },

@@ -148,16 +148,13 @@ def tool_specs(agent: "Agent", ctx: "RunContext") -> list[ToolSpec]:
     contacts = ctx.contacts_of(agent)
     if contacts:
         names = list(contacts)
-        modes = org.communication.modes
-        if "ask" in modes:
-            specs.append(ToolSpec("ask", "Ask an allowed colleague a question and wait for their answer.",
-                                  _obj({"to": {"type": "string", "enum": names}, "question": {"type": "string"}},
-                                       ["to", "question"])))
-        if "message" in modes:
-            specs.append(ToolSpec("send_message", "Leave a note in an allowed colleague's inbox (no reply). They see "
-                                  "it the next time they act.",
-                                  _obj({"to": {"type": "string", "enum": names}, "text": {"type": "string"}},
-                                       ["to", "text"])))
+        specs.append(ToolSpec("ask", "Ask an allowed colleague a question and wait for their answer.",
+                              _obj({"to": {"type": "string", "enum": names}, "question": {"type": "string"}},
+                                   ["to", "question"])))
+        specs.append(ToolSpec("send_message", "Leave a note in an allowed colleague's inbox (no reply). They see "
+                              "it the next time they act.",
+                              _obj({"to": {"type": "string", "enum": names}, "text": {"type": "string"}},
+                                   ["to", "text"])))
 
     if agent.parent is None:
         props = {"answer": {"type": "string", "description": "the final answer only"},
@@ -236,9 +233,6 @@ class Toolbox:
         """Validate one assignment and return (rendered order text, structured fields)."""
         rules = self.ctx.org.orders
         fields = {k: str(a.get(k) or "").strip() for k, _, _, _, _ in ORDER_FIELDS}
-        if not any(fields.values()) and a.get("task"):
-            raise ToolError("write a structured order (objective, context, deliverables, constraints, done_when), "
-                            "not a single task string")
         missing = [k for k, _, req, _, _ in ORDER_FIELDS if req and not fields[k]]
         if missing:
             raise ToolError(f"missing {', '.join(missing)}")
@@ -515,7 +509,7 @@ class Toolbox:
                                 "knowledge (facts, decisions, interfaces, results), not orders.")
         if existing and not args.get("append") and existing.content.strip() == args["content"].strip():
             return f"No change: {inst.id} / {existing.title} already has this content."
-        agent.wiki_writes += 1
+        agent.recorded = True
         rev = store.write(inst.id, args["page"], args["content"], author=agent.name, role=agent.spec.role,
                           level=agent.level, model=agent.model.alias, append=bool(args.get("append")),
                           summary=str(args.get("summary") or ""))
@@ -558,7 +552,7 @@ class Toolbox:
             raise ToolError("file too large")
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content)
-        agent.files_written += 1
+        agent.recorded = True
         self.ctx.event(agent, "write", {"path": str(p.relative_to(self.ws)), "chars": len(content)})
         return f"Wrote {len(content)} chars to {p.relative_to(self.ws)}"
 

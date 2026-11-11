@@ -50,22 +50,42 @@ def test_openai_trim_clips_old_turns_and_keeps_the_order_and_recent_turns():
     assert conv.trim(keep_turns=2, keep_chars=200) == 0 and conv.messages == snapshot  # idempotent: cache-friendly
 
 
-def test_anthropic_trim_leaves_thinking_blocks_alone():
+def test_anthropic_trim_drops_every_thinking_block():
+    # Claude signs each thinking block against the history before it: once a trim edits earlier turns,
+    # replaying any of them (even in the turns kept intact) is rejected, so a trim drops them all.
     conv = AnthropicConversation("system prompt", [])
     conv.add_user(ORDER)
-    thinking = ThinkingBlock(type="thinking", thinking="t" * 3000, signature="sig")
+    conv.add_assistant([ThinkingBlock(type="thinking", thinking="ran out of tokens while thinking", signature="s")])
+    conv.add_user("Reminder: plain-text replies are not delivered.")
     for i in range(3):
-        conv.add_assistant([thinking, TextBlock(type="text", text="note " * 400),
+        conv.add_assistant([ThinkingBlock(type="thinking", thinking="t" * 3000, signature="sig"),
+                            TextBlock(type="text", text="note " * 400),
                             ToolUseBlock(type="tool_use", id=f"t{i}", name="write_file",
                                          input={"path": "a.py", "content": "x" * 5000})])
         conv.add_tool_results([ToolResult(f"t{i}", "y" * 5000)])
     assert conv.trim(keep_turns=1, keep_chars=200) > 0
-    first_assistant = conv.messages[1]["content"]
-    assert first_assistant[0] is thinking
-    assert TRIM_MARK in first_assistant[1].text and TRIM_MARK in first_assistant[2].input["content"]
-    assert TRIM_MARK in conv.messages[2]["content"][0]["content"]
+    assistant = [m["content"] for m in conv.messages if m["role"] == "assistant"]
+    assert not [b for c in assistant for b in c if getattr(b, "type", "") == "thinking"]
+    assert assistant[0] == [{"type": "text", "text": "(reasoning trimmed)"}]  # a turn that was only thinking
+    assert TRIM_MARK in assistant[1][0].text and TRIM_MARK in assistant[1][1].input["content"]
+    assert assistant[-1][0].text == "note " * 400 and assistant[-1][1].input["content"] == "x" * 5000  # kept intact
     assert conv.messages[0]["content"][0]["text"] == ORDER
     assert conv.messages[-1]["content"][0]["content"] == "y" * 5000
+    snapshot = copy.deepcopy(conv.messages)
+    assert conv.trim(keep_turns=1, keep_chars=200) == 0 and conv.messages == snapshot
+
+
+def test_openai_trim_drops_replayed_reasoning_only_when_it_edits():
+    conv = _openai_conv(turns=2)
+    for m in conv.messages:
+        if m["role"] == "assistant":
+            m["reasoning_details"] = [{"type": "reasoning.text", "text": "because", "signature": "s"}]
+    assert conv.trim(keep_turns=2, keep_chars=200) == 0  # nothing old enough: history and reasoning untouched
+    assert all("reasoning_details" in m for m in conv.messages if m["role"] == "assistant")
+    conv = _openai_conv()
+    conv.messages[-2]["reasoning_details"] = [{"type": "reasoning.text", "text": "because", "signature": "s"}]
+    assert conv.trim(keep_turns=2, keep_chars=200) > 0
+    assert not any("reasoning_details" in m for m in conv.messages)
 
 
 def test_mock_trim_keeps_the_instruction():

@@ -10,13 +10,14 @@ outside the delegate/report chain (`communication`).
 
 from __future__ import annotations
 
+import json
 import re
 from collections import Counter
 from pathlib import Path
 from typing import Any, Iterator, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, ValidationError, model_validator
 
 from .ranks import SOLO_RANK, WORKER_RANK, management_ranks
 
@@ -108,7 +109,6 @@ class CommunicationRules(BaseModel):
     skip_up: int = Field(0, ge=0)
     skip_down: int = Field(0, ge=0)
     cc_skipped: bool = True
-    modes: list[Literal["ask", "message"]] = ["ask", "message"]
     max_message_chars: int = Field(1500, ge=100)  # per send_message
     max_question_chars: int = Field(800, ge=100)  # per ask
     max_answer_tokens: int = Field(600, ge=100)  # answers to questions are short
@@ -117,7 +117,7 @@ class CommunicationRules(BaseModel):
     @property
     def enabled(self) -> bool:
         any_rule = self.chain or self.peers or self.cross_team or self.open or self.skip_up or self.skip_down
-        return bool(any_rule and self.modes and self.max_messages)
+        return bool(any_rule and self.max_messages)
 
 
 class CheckinRules(BaseModel):
@@ -140,7 +140,8 @@ class ContextRules(BaseModel):
     output, messages, reports and the bulky arguments of old tool calls (e.g. file contents it wrote)
     are cut to trim_to characters each; its orders and its last keep_turns turns stay intact. Trimming
     happens in one go when the limit is crossed (down to about 60% of it), so prompt caching keeps
-    working between trims."""
+    working between trims. A trim also drops the model's earlier reasoning: reasoning that providers
+    sign is only valid on an unedited history."""
 
     model_config = ConfigDict(extra="forbid")
     max_tokens: int = Field(30000, ge=2000)
@@ -153,10 +154,11 @@ class OrderRules(BaseModel):
 
     Every order has an objective, distilled context, deliverables, constraints and a done-when test
     (a simplified military orders format). Orders run in the background: `delegate` returns at once
-    and reports come back as subordinates finish. no_forwarding rejects orders (and wiki edits) that
-    paste long passages of the writer's own orders. Length limits: max_chars for orders to commanders, max_chars_worker for orders to hands-on workers
-    (one well-scoped task), max_report_chars for reports going up. no_micromanaging rejects orders to a
-    commander that name positions below it: the commander decides how to split its own work.
+    and reports come back as subordinates finish. Length limits: max_chars for orders to commanders,
+    max_chars_worker for orders to hands-on workers (one well-scoped task), max_report_chars for
+    reports going up. no_micromanaging rejects orders to a commander that name positions below it (the
+    commander decides how to split its own work); no_forwarding rejects orders and wiki edits that
+    paste long passages of the writer's own orders.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -464,6 +466,27 @@ def load_org(path: str | Path) -> OrgConfig:
     return OrgConfig.model_validate(data)
 
 
+def org_from_json(text: str | None) -> OrgConfig | None:
+    """The org saved with a run, or None. Options that have since been removed are dropped, so runs
+    recorded by older versions still open."""
+    if not text:
+        return None
+    data = json.loads(text)
+    while True:
+        try:
+            return OrgConfig.model_validate(data)
+        except ValidationError as e:
+            errors = e.errors()
+            if any(err["type"] != "extra_forbidden" for err in errors):
+                return None
+            for err in errors:
+                *path, key = [k for k in err["loc"] if not str(k).startswith("function-")]
+                parent = data
+                for k in path:
+                    parent = parent[k]
+                parent.pop(key, None)
+
+
 # ---------------------------------------------------------------------------
 # Topology generation: same worker count, different depth.
 # ---------------------------------------------------------------------------
@@ -502,25 +525,26 @@ class GenerateSpec(BaseModel):
     For depth d, the top tier is always kept and the remaining d-1 tiers are taken from the
     bottom of the ladder, so flattening removes middle management first. Set `ladder` to a
     single template to give every management tier the same model (structure-only control).
+    Depth 0 is the single-agent baseline: the top template working alone.
     """
 
     model_config = ConfigDict(extra="forbid")
     name: str
     workers: int
-    depths: list[int]
+    depths: list[int] = Field(min_length=1)
     ladder: list[LevelTemplate]
     worker: LevelTemplate
     spans: dict[int, list[int]] = {}  # optional explicit spans per depth
     communication: dict = {}
     knowledge: dict = {}
-    include_solo: bool = False  # also emit a single-agent baseline using the top template
 
     def build(self) -> list[OrgConfig]:
         orgs = []
-        if self.include_solo:
-            top = self.ladder[0]
-            orgs.append(OrgConfig(name=f"{self.name}-solo", levels=[top.level(top.role or SOLO_RANK)]))
         for d in self.depths:
+            if d == 0:
+                top = self.ladder[0]
+                orgs.append(OrgConfig(name=f"{self.name}-solo", levels=[top.level(top.role or SOLO_RANK)]))
+                continue
             spans = self.spans.get(d) or balanced_spans(self.workers, d)
             if len(self.ladder) == 1:
                 tiers = [self.ladder[0]] * d

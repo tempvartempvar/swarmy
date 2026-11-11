@@ -10,6 +10,7 @@ from collections import Counter, defaultdict
 from functools import lru_cache
 from pathlib import Path
 
+from .config import org_from_json
 from .tasks import make_task
 from .tracing import Tracer
 
@@ -31,7 +32,10 @@ def _key_terms(family: str, params_json: str, seed: int) -> tuple[str, ...]:
 def run_metrics(run: dict, calls: list[dict], events: list[dict]) -> dict:
     total_cost = sum(c["cost_usd"] or 0 for c in calls)
     mgr = [c for c in calls if c["is_manager"]]
-    tok = lambda c: (c["input_tokens"] or 0) + (c["cache_read_tokens"] or 0) + (c["cache_write_tokens"] or 0) + (c["output_tokens"] or 0)
+
+    def tok(c: dict) -> int:  # tokens read (incl. cached) and generated
+        return sum(c[k] or 0 for k in ("input_tokens", "cache_read_tokens", "cache_write_tokens", "output_tokens"))
+
     total_tok = sum(tok(c) for c in calls)
     by_level: dict[int, float] = defaultdict(float)
     for c in calls:
@@ -133,19 +137,15 @@ def summarize(done: list[dict]) -> list[dict]:
             "families": {fam: _mean([r["score"] for r in rs if r["family"] == fam])
                          for fam in sorted({r["family"] for r in rs})},
             "cost_by_level": _sum_levels([r["cost_by_level"] for r in rs], len(rs)),
-            "roles": _layer_roles(rs[0]["org_json"]),
+            "roles": _layer_roles(rs[0]["org_json"]),  # one title per level, top first
         })
     out.sort(key=lambda s: (-(s["score"] or 0), s["cost_per_run"]))
     return out
 
 
-def _layer_roles(org_json: str) -> list[dict]:
-    from .config import OrgConfig
-
-    try:
-        return [{"role": r} for r in OrgConfig.model_validate_json(org_json).layer_roles()]
-    except Exception:
-        return [{"role": lv.get("role", "?")} for lv in (json.loads(org_json).get("levels") or [])]
+def _layer_roles(org_json: str) -> list[str]:
+    org = org_from_json(org_json)
+    return org.layer_roles() if org else []
 
 
 def _sum_levels(dicts, n):
@@ -347,7 +347,7 @@ def write_report(tracer: Tracer, sweep_ref: str | None, out_dir: Path | None = N
         cells = []
         for i in range(6):
             if i < len(s["roles"]):
-                cells.append(f"{s['roles'][i]['role']}: {_f(s['cost_by_level'].get(i, 0.0), '${:.4f}')}")
+                cells.append(f"{s['roles'][i]}: {_f(s['cost_by_level'].get(i, 0.0), '${:.4f}')}")
             else:
                 cells.append("")
         lines.append(f"| {s['org']} | " + " | ".join(cells) + " |")

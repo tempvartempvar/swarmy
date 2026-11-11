@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 
 import anthropic
-
-import os
 
 from ..catalog import Endpoint, ModelSpec
 from .base import (
@@ -20,11 +19,11 @@ from .base import (
     Retryable,
     StepResult,
     ToolCall,
-    clip_args,
-    clip_text,
     ToolResult,
     ToolSpec,
     Usage,
+    clip_args,
+    clip_text,
     with_retries,
 )
 
@@ -32,9 +31,21 @@ FALLBACK_BETA = "server-side-fallback-2026-07-01"
 STOP_MAP = {"end_turn": "end_turn", "tool_use": "tool_use", "max_tokens": "max_tokens", "refusal": "refusal"}
 
 
+THINKING = ("thinking", "redacted_thinking")
+
+
+def _chars(block) -> int:
+    try:
+        return len(json.dumps(block.model_dump(exclude={"signature"}), default=str))
+    except Exception:
+        return 500
+
+
 class AnthropicConversation(Conversation):
-    """Native Messages-API history. Append-only: assistant content is replayed unchanged
-    (thinking blocks included), which keeps prompt caching and preserved thinking valid."""
+    """Native Messages-API history. Append-only between trims: assistant content is replayed
+    unchanged (thinking blocks included), which keeps prompt caching and preserved thinking valid.
+    Claude signs each thinking block against everything before it, so a trim, which edits earlier
+    turns, also drops every thinking block (the documented way to edit a history)."""
 
     def __init__(self, system: str, tools: list[ToolSpec]):
         super().__init__(system, tools)
@@ -106,15 +117,17 @@ class AnthropicConversation(Conversation):
                             b = b.model_copy(update={"input": new})
                 blocks.append(b)
             m["content"] = blocks
+        if saved:
+            for m in self.messages:
+                if m["role"] == "assistant":
+                    kept = [b for b in m["content"] if getattr(b, "type", "") not in THINKING]
+                    saved += sum(_chars(b) for b in m["content"] if getattr(b, "type", "") in THINKING)
+                    m["content"] = kept or [{"type": "text", "text": "(reasoning trimmed)"}]
         self.chars = max(0, self.chars - saved)
         return saved
 
     def add_assistant(self, content: list) -> None:
-        for block in content:
-            try:
-                self.chars += len(json.dumps(block.model_dump(exclude={"signature"}), default=str))
-            except Exception:
-                self.chars += 500
+        self.chars += sum(_chars(b) for b in content)
         self.messages.append({"role": "assistant", "content": content})
 
 
