@@ -208,7 +208,7 @@ ZDR_404 = json.dumps({"error": {"code": 404, "message": (
 def test_preflight_stops_before_the_mission_when_a_model_cant_be_used(local_env, monkeypatch, tmp_path):
     import swarmy.providers as providers
 
-    monkeypatch.setattr(providers, "_PREFLIGHT_OK", {})
+    monkeypatch.setattr(providers, "_CHECKED", {})
     task = make_task("qa", {"kind": "chain", "hops": 2}, 1)
     with openrouter_stub([(404, ZDR_404)]) as stub:
         catalog = Catalog.load(offline=True)
@@ -237,7 +237,7 @@ def test_preflight_stops_before_the_mission_when_a_model_cant_be_used(local_env,
 def test_preflight_passes_then_caches(local_env, monkeypatch, tmp_path):
     import swarmy.providers as providers
 
-    monkeypatch.setattr(providers, "_PREFLIGHT_OK", {})
+    monkeypatch.setattr(providers, "_CHECKED", {})
     task = make_task("qa", {"kind": "chain", "hops": 2}, 1)
     script = [(200, openrouter_tool_call("noop", {})),
               (200, openrouter_tool_call("submit", {"answer": task.gold()["expected"], "report": "done", "status": "Done"}))]

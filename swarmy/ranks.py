@@ -69,17 +69,3 @@ def management_ranks(depth: int) -> list[str]:
     extra = [f"officer-{i}" for i in range(1, max(0, depth - len(OFFICER_LADDER)) + 1)]
     return (OFFICER_LADDER + extra)[:depth]
 
-
-def rank_between(upper: str | None, lower: str | None) -> str:
-    """A title for a new layer inserted between two ranks (used by the designer): the rank just
-    below `upper`, or just above `lower` when `upper` is not a known rank."""
-    lad = OFFICER_LADDER
-    if upper not in lad and lower not in lad:
-        return "lieutenant"
-    hi = lad.index(upper) if upper in lad else None
-    lo = lad.index(lower) if lower in lad else len(lad)
-    if hi is not None and hi + 1 < lo:
-        return lad[hi + 1]
-    if hi is None and lo > 0:
-        return lad[lo - 1]
-    return f"deputy-{upper or 'officer'}"

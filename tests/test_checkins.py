@@ -137,10 +137,3 @@ def test_checkin_guard_reports_low_budget():
     assert _checkin_blocked(RunBudget(1.0), 0.15, 1000, 1200) is None
     assert "time limit" in _checkin_blocked(RunBudget(None), 0.15, 60, 1200)
 
-
-def test_fresh_memory_checkins_repeat_the_brief(tmp_path):
-    s, _, _, _ = _run(_org(root_turns=1, memory="fresh"), tmp_path)
-    lines = [json.loads(x) for x in (tmp_path / "runs" / s["run_id"] / "transcript.jsonl").read_text().splitlines()]
-    inputs = [x["text"] for x in lines if x.get("node") == "field-marshal" and x.get("kind") == "input"]
-    assert len(inputs) == 3 and all(t.startswith("Assignment from the client:") for t in inputs)
-    assert "Check-in from the client (1 of 2)" in inputs[1]

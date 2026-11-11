@@ -26,7 +26,6 @@ READ_ONLY_FILES = {"SPEC.md"}
 MAX_READ = 20000
 MAX_WRITE = 200_000
 MAX_WIKI_PAGE = 30_000
-ANSWER_TOKENS = 4000
 
 
 ORDER_FIELDS = [  # (key, heading, required, max chars, description)
@@ -85,32 +84,23 @@ def tool_specs(agent: "Agent", ctx: "RunContext") -> list[ToolSpec]:
         names = [c.name for c in agent.children]
         rules = org.orders
         to_field = {"type": "string", "enum": names, "description": "name of the direct subordinate"}
-        if rules.format == "structured":
-            item = _obj({"to": to_field, **{k: {"type": "string", "description": d} for k, _, _, _, d in ORDER_FIELDS}},
-                        ["to"] + [k for k, _, req, _, _ in ORDER_FIELDS if req])
-            how = ("Each order is a well-constrained task: one objective, only the context that subordinate needs "
-                   "(distilled, in your own words), concrete deliverables, constraints and a done-when test.")
-        else:
-            item = _obj({"to": to_field, "task": {"type": "string", "description": "complete, self-contained instructions"}},
-                        ["to", "task"])
-            how = "Each order must be self-contained."
+        item = _obj({"to": to_field, **{k: {"type": "string", "description": d} for k, _, _, _, d in ORDER_FIELDS}},
+                    ["to"] + [k for k, _, req, _, _ in ORDER_FIELDS if req])
         forward = " Orders that repeat your own orders verbatim are rejected." if rules.no_forwarding else ""
-        when = ("All orders in one call run in parallel; the tool returns when every subordinate has reported back."
-                if rules.blocking else
-                "Orders run in the background and the tool returns at once, so you can keep working; reports arrive "
-                "as subordinates finish (at the start of your next turn, or call `wait`). A subordinate takes one "
-                "order at a time.")
         specs.append(ToolSpec(
             "delegate",
-            f"Give orders to one or more of your direct subordinates. {when} The subordinate sees only what you "
-            f"write. {how} Keep each order under {rules.max_chars} characters.{forward}",
+            "Give orders to one or more of your direct subordinates. Orders run in the background and the tool "
+            "returns at once, so you can keep working; reports arrive as subordinates finish (at the start of your "
+            "next turn, or call `wait`). A subordinate takes one order at a time and sees only what you write. Each "
+            "order is a well-constrained task: one objective, only the context that subordinate needs (distilled, "
+            "in your own words), concrete deliverables, constraints and a done-when test. Keep orders under "
+            f"{rules.max_chars} characters to commanders and {rules.max_chars_worker} to hands-on workers.{forward}",
             _obj({"assignments": {"type": "array", "items": item}}, ["assignments"]),
         ))
-        if not rules.blocking:
-            specs.append(ToolSpec(
-                "wait", "Wait for reports from your subordinates and return them. for='any' (default) returns as soon "
-                "as at least one report is in; for='all' waits until every order you have out has reported back.",
-                _obj({"for": {"type": "string", "enum": ["any", "all"]}}, [])))
+        specs.append(ToolSpec(
+            "wait", "Wait for reports from your subordinates and return them. for='any' (default) returns as soon "
+            "as at least one report is in; for='all' waits until every order you have out has reported back.",
+            _obj({"for": {"type": "string", "enum": ["any", "all"]}}, [])))
     if task.has_workspace and (hands_on or review):
         specs.append(ToolSpec("list_files", "List files in the shared workspace.", _obj({}, [])))
         specs.append(ToolSpec("read_file", "Read a text file from the shared workspace.",
@@ -245,22 +235,17 @@ class Toolbox:
     def _order_from(self, agent: "Agent", a: dict, child: "Agent") -> tuple[str, dict]:
         """Validate one assignment and return (rendered order text, structured fields)."""
         rules = self.ctx.org.orders
-        if rules.format == "structured":
-            fields = {k: str(a.get(k) or "").strip() for k, _, _, _, _ in ORDER_FIELDS}
-            if not any(fields.values()) and a.get("task"):
-                raise ToolError("write a structured order (objective, context, deliverables, constraints, done_when), "
-                                "not a single task string")
-            missing = [k for k, _, req, _, _ in ORDER_FIELDS if req and not fields[k]]
-            if missing:
-                raise ToolError(f"missing {', '.join(missing)}")
-            for k, _, _, limit, _ in ORDER_FIELDS:
-                if len(fields[k]) > limit * LIMIT_GRACE:
-                    raise ToolError(f"{k} is {len(fields[k])} characters; keep it under {limit}. Distill it.")
-            text = render_order(fields)
-        else:
-            text, fields = str(a.get("task") or "").strip(), {}
-            if not text:
-                raise ToolError("empty task")
+        fields = {k: str(a.get(k) or "").strip() for k, _, _, _, _ in ORDER_FIELDS}
+        if not any(fields.values()) and a.get("task"):
+            raise ToolError("write a structured order (objective, context, deliverables, constraints, done_when), "
+                            "not a single task string")
+        missing = [k for k, _, req, _, _ in ORDER_FIELDS if req and not fields[k]]
+        if missing:
+            raise ToolError(f"missing {', '.join(missing)}")
+        for k, _, _, limit, _ in ORDER_FIELDS:
+            if len(fields[k]) > limit * LIMIT_GRACE:
+                raise ToolError(f"{k} is {len(fields[k])} characters; keep it under {limit}. Distill it.")
+        text = render_order(fields)
         limit = rules.max_chars if child.children else rules.max_chars_worker
         if len(text) > limit * LIMIT_GRACE:
             if child.children:
@@ -335,12 +320,6 @@ class Toolbox:
             agent.outstanding[oid] = {"to": to, "task": task}
             ctx.order_tasks.add(task)
         notes = [f"Note: {p}. Fix and resend that order if it is still needed." for p in problems]
-        if ctx.org.orders.blocking:
-            ctx.live(agent, "waiting", {"on": list(jobs)})
-            await agent.wait_for(lambda: not agent.outstanding)
-            ctx.live(agent, "working", {})
-            reps, agent.arrived = agent.arrived, []
-            return "\n\n".join(notes + [r["text"] for r in reps])
         sent = ", ".join(f"#{order_ids[to]} to {to}" for to in jobs)
         return "\n".join(notes + [
             f"Orders sent: {sent}. They are being worked on now, in parallel. Reports arrive as each subordinate "

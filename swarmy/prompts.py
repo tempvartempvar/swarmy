@@ -32,9 +32,7 @@ def _forces(agent: "Agent", ctx: "RunContext") -> list[str]:
     for c in agent.children:
         below = sum(1 for _ in c.walk()) - 1
         hands = sum(1 for x in c.walk() if not x.children)
-        desc = f"- {c.name} ({c.spec.role})"
-        if ctx.org.disclose_models:
-            desc += f": model {c.model.model}" + (f", effort {c.spec.effort}" if c.spec.effort else "")
+        desc = f"- {c.name} ({c.spec.role}): model {c.model.model}" + (f", effort {c.spec.effort}" if c.spec.effort else "")
         desc += (f"; commands {below} position{'s' if below != 1 else ''} below, {hands} doing hands-on work"
                  if c.children else "; does hands-on work")
         if c.spec.can_do_work and c.children:
@@ -76,15 +74,12 @@ def system_prompt(agent: "Agent", ctx: "RunContext") -> str:
             lines.append("- You have hands-on tools, but your main job is to direct your reports.")
         else:
             lines.append("- You have no hands-on tools. You get work done by calling `delegate`.")
-        if org.orders.format == "structured":
-            lines += [
-                "- You are a commander, not a relay. Turn your orders into smaller, well-constrained tasks: each "
-                "order has one objective, only the context that subordinate needs (distilled, in your own words), "
-                "concrete deliverables, constraints, and a done-when test. Don't forward your own orders: decide "
-                "the plan and give each subordinate its part."
-                + (" Orders that repeat your orders verbatim are rejected." if org.orders.no_forwarding else ""),
-            ]
         lines += [
+            "- You are a commander, not a relay. Turn your orders into smaller, well-constrained tasks: each "
+            "order has one objective, only the context that subordinate needs (distilled, in your own words), "
+            "concrete deliverables, constraints, and a done-when test. Don't forward your own orders: decide "
+            "the plan and give each subordinate its part."
+            + (" Orders that repeat your orders verbatim are rejected." if org.orders.no_forwarding else ""),
             "- Your subordinates only see what you send them (and any wiki pages they can read). Include the exact "
             "names, numbers, interfaces and file paths they need, and nothing they don't. Put facts several people "
             "need on a wiki page once and point to it.",
@@ -95,15 +90,11 @@ def system_prompt(agent: "Agent", ctx: "RunContext") -> str:
             "scaffolding, test cases) and its real order once the inputs exist. An order that needs inputs that "
             "don't exist yet gets done with guesses.",
         ]
-        if org.orders.blocking:
-            lines.append("- `delegate` returns when every subordinate in the call has reported back; all their reports "
-                         "come back together.")
-        else:
-            lines.append("- `delegate` returns at once: your orders are worked on in the background while you keep "
-                         "working. Reports arrive as each subordinate finishes, shown at the start of your next turn, "
-                         "or call `wait` to wait for them. While orders are out you can check files, update the wiki, "
-                         "answer questions, or give orders to subordinates who are free. You can't submit until "
-                         "every report is back.")
+        lines.append("- `delegate` returns at once: your orders are worked on in the background while you keep "
+                     "working. Reports arrive as each subordinate finishes, shown at the start of your next turn, "
+                     "or call `wait` to wait for them. While orders are out you can check files, update the wiki, "
+                     "answer questions, or give orders to subordinates who are free. You can't submit until "
+                     "every report is back.")
         lines.append("- Give each subordinate an outcome, not a procedure: what must be achieved, why it matters, the "
                      "constraints, and how you will judge it. Leave the how to them; don't spell out details they "
                      "are better placed to decide.")
@@ -181,7 +172,7 @@ def system_prompt(agent: "Agent", ctx: "RunContext") -> str:
         "- Be efficient: every message and tool call costs money. Do not duplicate work.",
         "- Always finish by calling `submit`. Plain-text replies are not delivered to anyone.",
         f"- You have {agent.max_turns(org)} turns (model calls) per order"
-        + ("; turns spent only on `wait` don't count" if agent.children and not org.orders.blocking else "")
+        + ("; turns spent only on `wait` don't count" if agent.children else "")
         + ". You'll be told when 3 are left.",
     ]
     if lvl.prompt:

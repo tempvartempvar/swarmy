@@ -38,7 +38,6 @@ CROPS = {
 }
 PUMPS = ["AquaFlow P2", "AquaFlow P3", "HydroMax 40"]
 SIM_WEIGHT = 0.35
-HOURS = 30 * 24
 
 # Simulation loop shared by the in-process calibration and the sandboxed grader (kept as source so
 # exactly the same code runs in both places).

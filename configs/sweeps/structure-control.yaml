@@ -18,7 +18,7 @@ orgs:
       depths: [2]
       ladder: [{model: haiku}]
       worker: {model: haiku}
-      communication: team_board
+      knowledge: {wikis: [{name: unit-log, scope: team}]}
 tasks:
   - {family: qa, params: {kind: aggregate, n: 6}, seeds: [1, 2, 3]}
   - {family: code, params: {n: 6, coupling: 0.3}, seeds: [1, 2, 3]}

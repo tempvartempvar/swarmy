@@ -61,60 +61,61 @@ class ProviderRegistry:
             await p.aclose()
 
 
-async def probe(spec: ModelSpec, prompt: str = "Reply with the single word OK.") -> dict:
-    """One tiny real call to check an endpoint/model works. Returns text, latency, tokens and cost."""
+# ---- checking models: one tiny call, made the way agents make it ----
+_CHECK_TOOL = ToolSpec("noop", "Does nothing. Only here to check tool support.", {"type": "object", "properties": {}})
+_CHECKED: dict[tuple[str, str], float] = {}  # (endpoint, model) -> when it last passed
+CHECK_TTL_S = 1800
+
+
+async def check_model(registry: "ProviderRegistry", spec: ModelSpec, timeout_s: float = 90) -> dict:
+    """One tiny tool-enabled call. Catches a bad key, missing credits, an unknown model, no tool
+    support, or privacy settings that exclude every provider. Returns ok, fatal, error, latency_s,
+    text, served_model, input_tokens, output_tokens and cost_usd."""
+    import asyncio
     import time
 
-    reg = ProviderRegistry()
     t0 = time.monotonic()
+    out = {"alias": spec.alias, "model": spec.model, "endpoint": spec.endpoint, "ok": False, "fatal": False,
+           "error": None}
     try:
-        provider = reg.provider_for(spec)
-        conv = provider.new_conversation("You are a connectivity check. Follow the instruction exactly.", [])
-        conv.add_user(prompt)
-        r = await provider.step(conv, spec, max_tokens=512, effort="low" if spec.kind == "anthropic" else None)
-        return {"ok": True, "text": r.text[:200], "latency_s": round(time.monotonic() - t0, 2),
-                "served_model": r.served_model, "input_tokens": r.usage.prompt_tokens,
-                "output_tokens": r.usage.output_tokens, "cost_usd": spec.cost(r.usage)}
-    except Exception as e:  # report any failure to the caller
-        return {"ok": False, "error": f"{type(e).__name__}: {e}", "latency_s": round(time.monotonic() - t0, 2)}
+        provider = registry.provider_for(spec)
+        conv = provider.new_conversation("Connectivity check.", [_CHECK_TOOL])
+        conv.add_user("Reply with the single word OK.")
+        async with asyncio.timeout(timeout_s):
+            r = await provider.step(conv, spec, max_tokens=256, effort=None)
+        out.update(ok=True, text=r.text[:200], served_model=r.served_model, input_tokens=r.usage.prompt_tokens,
+                   output_tokens=r.usage.output_tokens, cost_usd=spec.cost(r.usage))
+    except FatalProviderError as e:
+        out.update(fatal=True, error=str(e))
+    except Exception as e:  # provider errors and timeouts may be transient
+        out["error"] = f"{type(e).__name__}: {e}"
+    out["latency_s"] = round(time.monotonic() - t0, 2)
+    return out
+
+
+async def probe(spec: ModelSpec) -> dict:
+    """check_model with its own client (the Models dialog and `swarmy models test`)."""
+    reg = ProviderRegistry()
+    try:
+        return await check_model(reg, spec)
     finally:
         await reg.aclose()
 
 
-# ---- preflight: is every model of an org usable before a run starts? ----
-_PREFLIGHT_TOOL = ToolSpec("noop", "Does nothing. Only here to check tool support.",
-                           {"type": "object", "properties": {}})
-_PREFLIGHT_OK: dict[tuple[str, str], float] = {}  # (endpoint, model) -> when it last passed
-PREFLIGHT_TTL_S = 1800
-
-
-async def preflight(registry: "ProviderRegistry", specs: list[ModelSpec], timeout_s: float = 90) -> list[dict]:
-    """One tiny tool-enabled call per model, in parallel, the way agents call it (same endpoint,
-    same routing), so a bad key, missing credits, an unknown model or a privacy setting that excludes
-    every provider shows up before anything else runs. Models that passed in the last 30 minutes
-    are skipped. Returns one dict per model: {alias, model, endpoint, ok, skipped, fatal, error}."""
+async def preflight(registry: "ProviderRegistry", specs: list[ModelSpec]) -> list[dict]:
+    """check_model for every distinct model of an org, in parallel, before a run. Models that passed in
+    the last 30 minutes (and mock models) are skipped."""
     import asyncio
     import time
 
     async def one(spec: ModelSpec) -> dict:
-        out = {"alias": spec.alias, "model": spec.model, "endpoint": spec.endpoint, "ok": True, "skipped": False,
-               "fatal": False, "error": None}
         key = (spec.endpoint, spec.model)
-        if spec.kind == "mock" or registry.mock or time.time() - _PREFLIGHT_OK.get(key, 0) < PREFLIGHT_TTL_S:
-            out["skipped"] = True
-            return out
-        try:
-            provider = registry.provider_for(spec)
-            conv = provider.new_conversation("Connectivity check.", [_PREFLIGHT_TOOL])
-            conv.add_user("Reply with OK.")
-            async with asyncio.timeout(timeout_s):
-                await provider.step(conv, spec, max_tokens=64, effort=None)
-            _PREFLIGHT_OK[key] = time.time()
-        except FatalProviderError as e:
-            out.update(ok=False, fatal=True, error=str(e))
-        except Exception as e:  # provider errors, timeouts: report, but they may be transient
-            out.update(ok=False, error=f"{type(e).__name__}: {e}")
-        return out
+        if spec.kind == "mock" or registry.mock or time.time() - _CHECKED.get(key, 0) < CHECK_TTL_S:
+            return {"alias": spec.alias, "model": spec.model, "endpoint": spec.endpoint, "ok": True, "skipped": True}
+        result = await check_model(registry, spec)
+        if result["ok"]:
+            _CHECKED[key] = time.time()
+        return {**result, "skipped": False}
 
     unique = list({(s.endpoint, s.model): s for s in specs}.values())
     return list(await asyncio.gather(*(one(s) for s in unique)))

@@ -342,7 +342,7 @@ class UIState:
                             "status": meta.get("status"), "score": meta.get("score"),
                             "family": (meta.get("task_id") or "").split("/")[0], "mtime": f.stat().st_mtime,
                             "mock": meta.get("mock"),
-                            "has_wikis": (f.parent / "wiki" / ".git").exists() or (f.parent / "wikis" / "wikis.json").exists()})
+                            "has_wikis": (f.parent / "wiki" / ".git").exists()})
         out.sort(key=lambda r: -r["mtime"])
         return out[:100]
 

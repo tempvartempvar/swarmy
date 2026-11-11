@@ -97,9 +97,6 @@ class World:
     def maker_city(self, product: str) -> City:
         return self.cities[self.companies[self.products[product].maker].hq]
 
-    def country_of(self, city: str) -> Country:
-        return self.countries[self.cities[city].country]
-
 
 class _Names:
     def __init__(self, rng: random.Random):

@@ -32,7 +32,7 @@ def test_revisions_record_author_rank_and_mode(tmp_path):
     store.write("orders", "Plan", "rewritten", author="private-2", role="private", level=1, model="haiku")
     page = store.find("orders", "PLAN")
     assert [r.mode for r in page.revisions] == ["create", "append", "replace"]
-    assert store.revision_content(page, 2) == "step 1\n\nstep 2" and page.content == "rewritten"
+    assert page.content == "rewritten"
     assert page.current.author == "private-2" and page.current.role == "private"
     assert page.contributors() == [("colonel", "colonel", 1), ("private-1", "private", 1),
                                    ("private-2", "private", 1)]
@@ -40,7 +40,9 @@ def test_revisions_record_author_rank_and_mode(tmp_path):
     data = store.to_json()
     md = render_markdown(data["instances"][0], data["instances"][0]["pages"][0])
     assert "| 2 |" in md and "private-1 | private | 1 | haiku | append" in md
-    assert store.diff("orders", "Plan", 3) == ["@@ -1,3 +1 @@", "-step 1", "-", "-step 2", "+rewritten"]
+    revs = data["instances"][0]["pages"][0]["revisions"]  # every revision's content and diff, from git
+    assert revs[1]["content"] == "step 1\n\nstep 2"
+    assert revs[2]["diff"] == ["@@ -1,3 +1 @@", "-step 1", "-", "-step 2", "+rewritten"]
 
 
 def test_every_edit_is_a_git_commit_and_reopens(tmp_path):
@@ -115,12 +117,3 @@ def test_cli_wiki(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "## Revision history" in out and "| rank |" in out
 
-
-def test_runs_saved_before_git_storage_still_load(tmp_path):
-    (tmp_path / "wikis").mkdir()
-    rev = {"version": 1, "author": "colonel", "role": "colonel", "level": 0, "model": "haiku", "mode": "create",
-           "content": "**old**", "t": 1.0, "chars_delta": 7, "summary": ""}
-    (tmp_path / "wikis" / "wikis.json").write_text(json.dumps({"instances": [
-        {"id": "orders", "label": "whole organization", "members": [], "pages": [{"title": "Plan", "revisions": [rev]}]}]}))
-    r = load(tmp_path)["instances"][0]["pages"][0]["revisions"][0]
-    assert r["html"] == "<p><strong>old</strong></p>\n" and r["diff"][-1] == "+**old**"

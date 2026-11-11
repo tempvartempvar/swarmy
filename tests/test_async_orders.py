@@ -5,7 +5,6 @@ import json
 
 from swarmy.providers import StepResult, ToolCall, Usage
 from swarmy.providers.mock_provider import MockProvider
-from swarmy.tools import tool_specs
 
 from .test_order_rules import _call, _ctx
 
@@ -94,14 +93,6 @@ def test_orders_still_out_when_a_commander_stops_are_passed_up(tmp_path):
     assert "came back after I stopped" in rep["report"] and "### Report from private-2" in rep["report"]
 
 
-def test_blocking_mode_returns_reports_from_delegate(tmp_path):
-    rep, seen, events, ctx = _captain_script(tmp_path, [
-        ("delegate", {"assignments": [_order("private-1"), _order("private-2", "Find the soil type.")]}),
-        SUBMIT,
-    ], org_extra={"orders": {"blocking": True}})
-    assert "### Report from private-1" in seen[1] and "### Report from private-2" in seen[1]
-    assert rep["status"] == "submitted"
-    assert "wait" not in {s.name for s in tool_specs(ctx.agents["captain"], ctx)}
 
 
 def test_order_fields_may_run_ten_percent_over(tmp_path):

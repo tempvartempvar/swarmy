@@ -72,10 +72,6 @@ def test_duplicate_names_rejected():
         OrgConfig.model_validate(bad)
 
 
-def test_legacy_board_strings_become_wikis():
-    org = _levels_org(communication="team_board")
-    assert [(w.name, w.scope) for w in org.knowledge.wikis] == [("team-notes", "team")]
-    assert not org.communication.enabled
 
 
 def test_relations():
@@ -109,7 +105,7 @@ def test_wiki_scopes_and_permissions():
     org = _levels_org(knowledge={"wikis": [
         {"name": "handbook", "scope": "org", "write": "managers"},
         {"name": "team", "scope": "team"},
-        {"name": "dept", "scope": "department", "level": 1, "oversight": False},
+        {"name": "dept", "scope": "department", "level": 1},
     ]})
     inst = {w.id: w for w in wiki_instances(org)}
     assert len([i for i in inst if i.startswith("team/")]) == 7  # one per manager
@@ -118,9 +114,9 @@ def test_wiki_scopes_and_permissions():
     assert "worker-1.1.1" in hb.readers and "worker-1.1.1" not in hb.writers and "ceo" in hb.writers
     t = inst["team/manager-1.1"]
     assert set(t.members) == {"manager-1.1", "worker-1.1.1", "worker-1.1.2"}
-    assert {"director-1", "ceo"} <= t.readers  # oversight on by default
+    assert {"director-1", "ceo"} <= t.readers  # commanders above a wiki's scope can read it
     d = inst["dept/director-1"]
-    assert "ceo" not in d.readers and "worker-1.2.2" in d.writers
+    assert "ceo" in d.readers and "ceo" not in d.writers and "worker-1.2.2" in d.writers
 
 
 def _run(org, task, tmp_path):

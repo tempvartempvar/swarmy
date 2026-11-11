@@ -87,7 +87,7 @@ def test_generate_and_yaml_roundtrip(server):
 
 def test_mock_run_with_live_state(server):
     call, _, _ = server
-    _, data = call("/api/orgs/regiment-mess")
+    _, data = call("/api/orgs/openrouter-squad")
     status, started = call("/api/runs", {"config": data["config"], "task": "code:n=4,coupling=0", "mock": True,
                                          "budget": 0.2})
     assert status == 200

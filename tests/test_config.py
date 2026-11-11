@@ -82,7 +82,7 @@ def test_catalog_shorthand_and_costs():
 
 
 def test_default_titles_are_military_ranks():
-    from swarmy.ranks import management_ranks, rank_between
+    from swarmy.ranks import management_ranks
 
     spec = GenerateSpec(name="g", workers=8, depths=[1, 2, 4], include_solo=True, ladder=[{"model": "sonnet"}],
                         worker={"model": "haiku"})
@@ -92,8 +92,6 @@ def test_default_titles_are_military_ranks():
     assert orgs["g-d2"] == ["field-marshal", "captain", "private"]
     assert orgs["g-d4"] == ["field-marshal", "general", "colonel", "captain", "private"]
     assert len(management_ranks(15)) == 15
-    assert rank_between("colonel", "captain") == "lieutenant-colonel"
-    assert rank_between("captain", "private") == "lieutenant"
 
 
 def test_auto_names_slug_spaces():

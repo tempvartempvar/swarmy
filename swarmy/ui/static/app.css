@@ -110,7 +110,6 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 1
 #chart.panning { cursor: grabbing; }
 .canvas-tools { position: absolute; right: 12px; top: 12px; display: flex; gap: 4px; }
 .canvas-tools button { background: var(--surface); box-shadow: var(--shadow); min-width: 32px; }
-.canvas-tools select { background: var(--surface); box-shadow: var(--shadow); }
 .hint { position: absolute; left: 12px; bottom: 10px; font-size: 12px; color: var(--muted); pointer-events: none; }
 .legend {
   position: absolute; left: 12px; top: 12px; background: var(--surface); border: 1px solid var(--line);
@@ -202,7 +201,6 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 1
 .node .cost { font-size: 10.5px; fill: var(--text-2); font-variant-numeric: tabular-nums; }
 .node .toggle circle { fill: var(--surface); stroke: var(--line-2); cursor: pointer; }
 .node .toggle text { font-size: 10px; fill: var(--text-2); text-anchor: middle; }
-.node.member rect.body { stroke-width: 2; }
 .node .state { fill: none; stroke-width: 3; rx: 12; }
 .st-working .state { stroke: var(--accent); }
 .st-thinking .state { stroke: var(--accent); animation: pulse 1s ease-in-out infinite; }
@@ -247,7 +245,6 @@ dialog textarea { height: 52vh; font-family: ui-monospace, SFMono-Regular, Menlo
   .brand span, .hint, .legend { display: none; }
   .chip { font-size: 11px; padding: 1px 7px; }
   .canvas-tools { right: 8px; top: 8px; }
-  .canvas-tools select { max-width: 120px; }
   .field { grid-template-columns: 96px 1fr; }
 }
 

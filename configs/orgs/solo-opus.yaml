@@ -1,6 +1,0 @@
-# Baseline: a lone wolf does everything itself, no chain of command.
-name: solo-opus
-levels:
-  - role: lone-wolf
-    model: opus
-    effort: medium

@@ -13,7 +13,7 @@ from .catalog import Catalog, ModelSpec, Price
 from .config import Node, NodeSettings, OrgConfig
 from .prompts import NUDGE, system_prompt
 from .errors import stops_run
-from .providers import ProviderError, ToolCall, ToolResult
+from .providers import ProviderError, ToolResult
 from .tools import LIMIT_GRACE, STATUS_FALLBACK, STATUS_WORDS, tool_specs, validate_args
 
 if TYPE_CHECKING:
@@ -159,7 +159,7 @@ class Agent:
 
     async def _handle(self, text: str, ctx: "RunContext") -> dict:
         provider = ctx.registry.provider_for(self.model)
-        if self.conv is None or ctx.org.memory == "fresh":
+        if self.conv is None:
             specs = tool_specs(self, ctx)
             self.specs = {s.name: s for s in specs}
             self.conv = provider.new_conversation(system_prompt(self, ctx), specs)
@@ -365,8 +365,7 @@ class Agent:
 
     def _should_remind(self, ctx: "RunContext") -> bool:
         # not on the last turn (it would cost the submission), and not when the results are already in files
-        if (self.reminded or self.wiki_writes or self.files_written or self.final_turn
-                or not ctx.org.knowledge.remind_before_submit):
+        if self.reminded or self.wiki_writes or self.files_written or self.final_turn:
             return False
         return any(can for _, can in ctx.wiki_access(self))
 

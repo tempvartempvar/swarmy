@@ -1,4 +1,4 @@
-"""Command line interface: swarmy run | sweep | plan | report | org | task | models."""
+"""Command line interface: swarmy run | sweep | plan | report | org | task | orders | wiki | log | ui | models."""
 
 from __future__ import annotations
 
@@ -178,13 +178,6 @@ def cmd_task(args) -> int:
 
 def cmd_models(args) -> int:
     catalog = Catalog.load(args.models)
-    if args.action == "endpoints":
-        print(f"{'endpoint':14} {'type':10} {'key':6} {'source':10} base url")
-        for name, ep in catalog.endpoints.items():
-            key = "-" if ep.api_key_env is None else ("set" if ep.key_present else "MISSING")
-            print(f"{name:14} {ep.type:10} {key:6} {ep.source:10} {ep.base_url or '(SDK default)'}"
-                  + (f"   [{ep.api_key_env}]" if ep.api_key_env else ""))
-        return 0
     if args.action == "test":
         if not args.name:
             raise SystemExit("usage: swarmy models test <alias or endpoint:model>")
@@ -194,18 +187,19 @@ def cmd_models(args) -> int:
         print(f"testing {args.name} ({spec.endpoint}:{spec.model}) with one short real call...")
         r = asyncio.run(probe(spec))
         if r["ok"]:
-            print(f"OK in {r['latency_s']}s: {r['text']!r}  ({r['input_tokens']} in / {r['output_tokens']} out, "
-                  f"${r['cost_usd']:.6f}, served by {r['served_model']})")
+            print(f"OK in {r['latency_s']}s ({r['input_tokens']} in / {r['output_tokens']} out, ${r['cost_usd']:.6f}, "
+                  f"served by {r['served_model']})")
             return 0
         print(f"FAILED after {r['latency_s']}s: {r['error']}")
         return 1
-    live_eps = [n for n, ep in catalog.endpoints.items() if ep.live_pricing]
-    if args.action == "refresh":
-        for name in live_eps:
-            print(f"cached {len(catalog.live_models(name, refresh=True))} {name} models")
-        return 0
-    live = {n: catalog.live_models(n, refresh=True) for n in live_eps} if args.action == "check" else {}
-    print(f"{'alias':16} {'endpoint':11} {'model':40} {'in $/M':>8} {'out $/M':>8}  notes")
+    print(f"{'endpoint':14} {'type':10} {'key':8} base url")
+    for name, ep in catalog.endpoints.items():
+        key = "-" if ep.api_key_env is None else ("set" if ep.key_present else "MISSING")
+        print(f"{name:14} {ep.type:10} {key:8} {ep.base_url or '(SDK default)'}"
+              + (f"   [{ep.api_key_env}]" if ep.api_key_env else ""))
+    live = ({n: catalog.live_models(n, refresh=True) for n, ep in catalog.endpoints.items() if ep.live_pricing}
+            if args.action == "check" else {})
+    print(f"\n{'alias':16} {'endpoint':11} {'model':40} {'in $/M':>8} {'out $/M':>8}  notes")
     for alias, spec in catalog.models.items():
         note = "" if spec.price_known else "price unknown (budget guard can't limit it)"
         if spec.endpoint in live:
@@ -219,8 +213,6 @@ def cmd_models(args) -> int:
                     note = f"live price {li:.4g}/{lo:.4g}"
                 if "tools" not in (meta.get("supported_parameters") or []):
                     note += " NO TOOL SUPPORT"
-        if spec.endpoint_cfg and not spec.endpoint_cfg.key_present:
-            note += f" ({spec.endpoint_cfg.api_key_env} not set)"
         print(f"{alias:16} {spec.endpoint:11} {spec.model[:40]:40} {spec.rate.input:>8.3f} {spec.rate.output:>8.3f}  {note}")
     return 0
 
@@ -412,8 +404,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--orgs-dir", default=None, help="where org YAML files are read and saved (default configs/orgs)")
     p.set_defaults(fn=cmd_ui)
 
-    p = sub.add_parser("models", help="list models / endpoints, check live prices, or test a model")
-    p.add_argument("action", nargs="?", default="list", choices=["list", "endpoints", "check", "refresh", "test"])
+    p = sub.add_parser("models", help="list endpoints and models; `check` live prices; `test` a model")
+    p.add_argument("action", nargs="?", default="list", choices=["list", "check", "test"])
     p.add_argument("name", nargs="?", help="for `test`: a model alias or endpoint:model-id")
     p.set_defaults(fn=cmd_models)
 

@@ -93,7 +93,7 @@ class RunContext:
         self.tracer.log_call({
             "run_id": self.run_id, "node": agent.name, "level": agent.level, "role": agent.spec.role,
             "is_manager": int(bool(agent.children)), "model_alias": agent.model.alias, "model_id": agent.model.model,
-            "served_model": r.served_model, "provider": agent.model.provider, "turn": turn, "purpose": purpose,
+            "served_model": r.served_model, "provider": agent.model.endpoint, "turn": turn, "purpose": purpose,
             "input_tokens": u.input_tokens, "output_tokens": u.output_tokens,
             "cache_read_tokens": u.cache_read_tokens, "cache_write_tokens": u.cache_write_tokens,
             "reasoning_tokens": u.reasoning_tokens, "cost_usd": cost, "latency_s": r.latency_s,
@@ -201,8 +201,6 @@ async def run_one(
         ctx.event(root, "checkin", {"round": checkins, "max": rules.max, "status": result["status"], "reason": reason,
                                     "report": result["report"][:4000], "tests": tests[:3000] if tests else None})
         message = checkin_message(checkins, rules.max, reason, tests)
-        if org.memory == "fresh":  # the top position starts from a blank conversation: repeat the brief
-            message = root_message(task) + "\n\n---\n\n" + message
     if submission is not None:
         ctx.event(root, "report", {"to": "client", "order_id": 0, "status": submission["status"],
                                    "status_line": submission.get("status_line"),

@@ -190,20 +190,6 @@ class WikiStore:
         _, blob = tree_lookup_path(self.repo.__getitem__, commit.tree, path.encode())
         return self.repo[blob].data.decode("utf-8", errors="replace")
 
-    def revision_content(self, page: Page, version: int) -> str:
-        with self._lock:
-            return self._blob(page.revisions[version - 1].sha, page.path)
-
-    def diff(self, wiki_id: str, title: str, version: int) -> list[str]:
-        """Unified diff (difflib) of one revision against the previous one."""
-        with self._lock:
-            page = self.find(wiki_id, title)
-            if page is None or not 1 <= version <= len(page.revisions):
-                raise KeyError(f"{wiki_id}/{title} v{version}")
-            new = self._blob(page.revisions[version - 1].sha, page.path)
-            old = self._blob(page.revisions[version - 2].sha, page.path) if version > 1 else ""
-        return unified_diff(old, new, version)
-
     def to_json(self, contents: bool = True) -> dict:
         with self._lock:
             out = []
@@ -259,23 +245,6 @@ class WikiStore:
         return store
 
 
-def _legacy_json(run_dir: Path) -> dict | None:
-    """Runs from before git storage saved wikis/wikis.json."""
-    f = run_dir / "wikis" / "wikis.json"
-    if not f.exists():
-        return None
-    data = json.loads(f.read_text())
-    for inst in data["instances"]:
-        for page in inst["pages"]:
-            prev = ""
-            for r in page["revisions"]:
-                r["html"] = to_html(r.get("content", ""))
-                r["diff"] = unified_diff(prev, r.get("content", ""), r["version"])
-                prev = r.get("content", "")
-    data["storage"] = "json"
-    return data
-
-
 def open_store(run_dir: Path) -> WikiStore | None:
     root = run_dir / "wiki"
     return WikiStore.open(root) if (root / ".git").exists() else None
@@ -285,7 +254,7 @@ def load(run_dir: Path) -> dict | None:
     """All wikis of a finished run (every revision with its content, HTML and diff), or None."""
     store = open_store(run_dir)
     if store is None:
-        return _legacy_json(run_dir)
+        return None
     try:
         data = store.to_json()
     finally:

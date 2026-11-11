@@ -22,7 +22,7 @@ from urllib.parse import urlparse
 
 import httpx
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 from .paths import CACHE_DIR, DEFAULT_MODELS_FILE
 
@@ -120,22 +120,9 @@ class ModelSpec(BaseModel):
     source: str = Field("builtin", exclude=True)
     endpoint_cfg: Endpoint | None = Field(None, exclude=True)
 
-    @model_validator(mode="before")
-    @classmethod
-    def _legacy_provider(cls, data):
-        """Older configs said `provider: anthropic|openrouter|mock`; that's now the endpoint name."""
-        if isinstance(data, dict) and "provider" in data:
-            data = dict(data)
-            data.setdefault("endpoint", data.pop("provider"))
-        return data
-
     @property
     def kind(self) -> str:
         return self.endpoint_cfg.type if self.endpoint_cfg else ("mock" if self.endpoint == "mock" else "openai")
-
-    @property
-    def provider(self) -> str:  # kept for logs and older callers: the endpoint name
-        return self.endpoint
 
     @property
     def price_known(self) -> bool:
@@ -276,14 +263,10 @@ class Catalog:
         self._live[endpoint] = {m["id"]: m for m in data}
         return self._live[endpoint]
 
-    # older name
-    def openrouter_models(self, refresh: bool = False) -> dict[str, dict]:
-        return self.live_models("openrouter", refresh)
-
     def _live_spec(self, spec: ModelSpec, ep: Endpoint) -> ModelSpec:
         meta = self.live_models(ep.name).get(spec.model)
         if meta is None:
-            raise KeyError(f"{ep.name} has no model {spec.model!r} (run `swarmy models refresh`).")
+            raise KeyError(f"{ep.name} has no model {spec.model!r} (run `swarmy models check` to refresh the list).")
         params = meta.get("supported_parameters") or []
         if "tools" not in params:
             raise ValueError(f"{ep.name} model {spec.model!r} does not support tool calling.")

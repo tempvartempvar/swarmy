@@ -115,18 +115,12 @@ class MockProvider(Provider):
                 "content": f"[mock] Placeholder note from {me}. Scripted mock agents don't plan or research; "
                            f"run with real models to see real notes."})
         if "delegate" in tools and "delegate" not in used:
-            item = tools["delegate"].parameters["properties"]["assignments"]["items"]
-            names = item["properties"]["to"].get("enum", [])
-            structured = "objective" in item["properties"]
-            assignments = []
-            for i, n in enumerate(names):
-                if structured:
-                    assignments.append({"to": n, "objective": f"[mock] part {i + 1} of {len(names)} from {me}",
-                                        "context": "[mock] Placeholder order: scripted agents don't distill orders.",
-                                        "deliverables": "[mock] a report", "done_when": "[mock] after a few tool calls"})
-                else:
-                    assignments.append({"to": n, "task": f"[mock] part {i + 1} of {len(names)} from {me}"})
-            return ToolCall(cid, "delegate", {"assignments": assignments})
+            names = tools["delegate"].parameters["properties"]["assignments"]["items"]["properties"]["to"]["enum"]
+            return ToolCall(cid, "delegate", {"assignments": [
+                {"to": n, "objective": f"[mock] part {i + 1} of {len(names)} from {me}",
+                 "context": "[mock] Placeholder order: scripted agents don't distill orders.",
+                 "deliverables": "[mock] a report", "done_when": "[mock] after a few tool calls"}
+                for i, n in enumerate(names)]})
         if "ask" in tools and "ask" not in used:
             to = self._enum(tools["ask"], "properties", "to")[0]
             return ToolCall(cid, "ask", {"to": to, "question": "[mock] placeholder question"})

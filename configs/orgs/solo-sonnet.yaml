@@ -1,6 +1,0 @@
-# Baseline: a lone wolf does everything itself, no chain of command.
-name: solo-sonnet
-levels:
-  - role: lone-wolf
-    model: sonnet
-    effort: medium

@@ -36,13 +36,13 @@ def _run(org, task, tmp_path, cap=1.0, catalog=None):
 
 
 def test_mock_run_records_hierarchy(tmp_path):
-    s = _run(_org(communication="team_board"), make_task("mixed", {}, 1), tmp_path)
+    s = _run(_org(knowledge={"wikis": [{"name": "unit-log", "scope": "team"}]}), make_task("mixed", {}, 1), tmp_path)
     assert s["status"] == "completed", s.get("error")
     assert set(s["nodes"]) == {"ceo", "manager-1", "manager-2", "worker-1.1", "worker-1.2", "worker-2.1",
                                "worker-2.2"}
     t = Tracer(tmp_path / "db.sqlite")
     kinds = {r["kind"] for r in t.query("SELECT DISTINCT kind FROM events")}
-    assert {"assign", "report", "progress", "wiki_write"} <= kinds  # legacy team_board -> team wiki
+    assert {"assign", "report", "progress", "wiki_write"} <= kinds
     assigns = t.query("SELECT data_json FROM events WHERE kind='assign' AND level=1")
     assert all(json.loads(a["data_json"])["leaf"] for a in assigns)
     assert (tmp_path / "runs").exists()

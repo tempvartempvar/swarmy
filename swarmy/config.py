@@ -74,6 +74,7 @@ class WikiSpec(BaseModel):
 
     scope org: one wiki for everyone. scope team: one wiki per team (a manager and their direct
     reports). scope department: one wiki per node at `level`, shared by that node's whole subtree.
+    Commanders above a wiki's scope can always read it.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -82,7 +83,6 @@ class WikiSpec(BaseModel):
     level: int = Field(1, ge=0)
     read: Audience = "all"
     write: Audience = "all"
-    oversight: bool = True  # managers above the scope can read it
     publish_brief: bool = False  # post the client's original assignment on it
     description: str = ""
 
@@ -90,9 +90,6 @@ class WikiSpec(BaseModel):
 class Knowledge(BaseModel):
     model_config = ConfigDict(extra="forbid")
     wikis: list[WikiSpec] = []
-    # Before accepting a report from an agent that can write to a wiki but hasn't during this
-    # assignment, remind it once to record what others need. It can still submit straight away.
-    remind_before_submit: bool = True
 
 
 class CommunicationRules(BaseModel):
@@ -154,25 +151,20 @@ class ContextRules(BaseModel):
 class OrderRules(BaseModel):
     """How commanders must write orders.
 
-    structured: every order has an objective, distilled context, deliverables, constraints and a
-    done-when test (a simplified military orders format). free: a single free-text task.
-    no_forwarding rejects orders (and wiki edits) that paste long passages of the writer's own orders.
-    blocking: when false (the default), `delegate` returns at once and reports arrive as subordinates
-    finish, so a commander can start several units, keep working and collect reports with `wait`. When
-    true, `delegate` waits for every report before returning (commanders can't act in the meantime).
-    Length limits: max_chars for orders to commanders, max_chars_worker for orders to hands-on workers
+    Every order has an objective, distilled context, deliverables, constraints and a done-when test
+    (a simplified military orders format). Orders run in the background: `delegate` returns at once
+    and reports come back as subordinates finish. no_forwarding rejects orders (and wiki edits) that
+    paste long passages of the writer's own orders. Length limits: max_chars for orders to commanders, max_chars_worker for orders to hands-on workers
     (one well-scoped task), max_report_chars for reports going up. no_micromanaging rejects orders to a
     commander that name positions below it: the commander decides how to split its own work.
     """
 
     model_config = ConfigDict(extra="forbid")
-    format: Literal["structured", "free"] = "structured"
     max_chars: int = Field(3000, ge=200)
     max_chars_worker: int = Field(1800, ge=200)
     max_report_chars: int = Field(3000, ge=300)
     no_micromanaging: bool = True
     no_forwarding: bool = True
-    blocking: bool = False
 
 
 class Node:
@@ -218,28 +210,9 @@ class OrgConfig(BaseModel):
     orders: OrderRules = OrderRules()
     checkins: CheckinRules = CheckinRules()
     context: ContextRules = ContextRules()
-    memory: Literal["persistent", "fresh"] = "persistent"
-    disclose_models: bool = True  # tell commanders which model each subordinate runs
     manager_max_turns: int = 12
     worker_max_turns: int = 24
     _root: Node | None = PrivateAttr(None)
-
-    @model_validator(mode="before")
-    @classmethod
-    def _legacy(cls, data: Any) -> Any:
-        """Accept the old `communication: tree | team_board | global_board` strings."""
-        if isinstance(data, dict) and isinstance(data.get("communication"), str):
-            data = dict(data)
-            kind = data.pop("communication")
-            wikis = list((data.get("knowledge") or {}).get("wikis") or [])
-            if kind == "team_board":
-                wikis.append({"name": "team-notes", "scope": "team"})
-            elif kind == "global_board":
-                wikis.append({"name": "org-notes", "scope": "org"})
-            elif kind != "tree":
-                raise ValueError(f"unknown communication mode {kind!r}")
-            data["knowledge"] = {**(data.get("knowledge") or {}), "wikis": wikis}
-        return data
 
     @model_validator(mode="after")
     def _check(self) -> "OrgConfig":
@@ -515,15 +488,11 @@ def balanced_spans(workers: int, depth: int) -> list[int]:
     return sorted(bins)
 
 
-class LevelTemplate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    model: str
-    effort: Effort | None = None
-    role: str | None = None
-    goal: str = ""
-    max_tokens: int | None = None
-    max_turns: int | None = None
-    prompt: str = ""
+class LevelTemplate(NodeSettings):
+    role: str | None = None  # default: the rank for that depth
+
+    def level(self, role: str, span: int = 0) -> LevelSpec:
+        return LevelSpec(**{**self.model_dump(), "role": role, "span": span})
 
 
 class GenerateSpec(BaseModel):
@@ -542,22 +511,15 @@ class GenerateSpec(BaseModel):
     ladder: list[LevelTemplate]
     worker: LevelTemplate
     spans: dict[int, list[int]] = {}  # optional explicit spans per depth
-    communication: dict | str = {}
+    communication: dict = {}
     knowledge: dict = {}
     include_solo: bool = False  # also emit a single-agent baseline using the top template
-
-    def _extras(self) -> dict:
-        return {"communication": self.communication, "knowledge": self.knowledge}
 
     def build(self) -> list[OrgConfig]:
         orgs = []
         if self.include_solo:
             top = self.ladder[0]
-            orgs.append(OrgConfig(
-                name=f"{self.name}-solo",
-                levels=[LevelSpec(role=top.role or SOLO_RANK, model=top.model, effort=top.effort, goal=top.goal,
-                                  max_tokens=top.max_tokens, max_turns=top.max_turns, prompt=top.prompt)],
-            ))
+            orgs.append(OrgConfig(name=f"{self.name}-solo", levels=[top.level(top.role or SOLO_RANK)]))
         for d in self.depths:
             spans = self.spans.get(d) or balanced_spans(self.workers, d)
             if len(self.ladder) == 1:
@@ -572,15 +534,12 @@ class GenerateSpec(BaseModel):
                 role = tpl.role or ranks[i]
                 if any(lv.role == role for lv in levels):
                     role = ranks[i] if not any(lv.role == ranks[i] for lv in levels) else f"{role}-{i}"
-                levels.append(LevelSpec(role=role, model=tpl.model, effort=tpl.effort, span=span, goal=tpl.goal,
-                                        max_tokens=tpl.max_tokens, max_turns=tpl.max_turns, prompt=tpl.prompt))
-            w = self.worker
-            levels.append(LevelSpec(role=w.role or WORKER_RANK, model=w.model, effort=w.effort, goal=w.goal,
-                                    max_tokens=w.max_tokens, max_turns=w.max_turns, prompt=w.prompt))
+                levels.append(tpl.level(role, span))
+            levels.append(self.worker.level(self.worker.role or WORKER_RANK))
             orgs.append(OrgConfig.model_validate({
                 "name": f"{self.name}-d{d}",
                 "description": f"generated: {self.workers} workers, depth {d}",
                 "levels": [lv.model_dump() for lv in levels],
-                **self._extras(),
+                "communication": self.communication, "knowledge": self.knowledge,
             }))
         return orgs

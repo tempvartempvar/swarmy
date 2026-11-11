@@ -22,7 +22,7 @@ const S = {
   idx: {}, layers: [], pos: {}, selected: null, selectedLevel: null, selectedWiki: null, tab: "structure",
   scope: null, collapsed: new Set(), undo: [], redo: [], view: { x: 40, y: 40, k: 1 }, run: null,
   flashes: [], pings: [], insertForm: null, customTask: false, depthY: [0], rows: [],
-  layoutMode: "auto", mode: "tree", frames: [],
+  mode: "tree", frames: [],
 };
 let NEXT_ID = 1;
 
@@ -242,21 +242,18 @@ function availableWidth() {
   return ($("#canvas").getBoundingClientRect().width - 30) / readableK() - BAND_PAD - 40;
 }
 function layout() {
+  // A tidy tree; when it is wider than the canvas, each level is split into rows instead.
   BAND_PAD = narrow() ? 12 : 160;
-  const m = S.layoutMode;
-  if (m === "rows") return layoutRows(availableWidth());
-  layoutTree(m !== "tree");
-  if (m === "auto") {
-    const b = bounds();
-    if (b.maxX - b.minX > availableWidth()) layoutRows(availableWidth());
-  }
+  layoutTree();
+  const b = bounds();
+  if (b.maxX - b.minX > availableWidth()) layoutRows(availableWidth());
 }
-function layoutTree(stack) {
-  // Top-down tidy layout. With `stack`, a commander whose subordinates are all hands-on gets them
-  // stacked vertically underneath (one column per unit), which keeps wide orgs narrower.
+function layoutTree() {
+  // Top-down tidy layout. A commander whose subordinates are all hands-on gets them stacked vertically
+  // underneath (one column per unit), which keeps wide orgs narrower.
   const pos = {}, rows = [];
   let cursor = 0;
-  const stacks = (n) => stack && (n.children || []).length >= 2 && !S.collapsed.has(n._id)
+  const stacks = (n) => (n.children || []).length >= 2 && !S.collapsed.has(n._id)
     && n.children.every((c) => !(c.children && c.children.length));
   (function place(n, depth) {
     const kids = n.children || [];
@@ -661,9 +658,6 @@ function structurePanel() {
   out.push(h("div", { class: "row end" }, h("button", { onclick: quickBuild }, "Build")));
 
   out.push(h("h3", {}, "Behaviour"));
-  out.push(field("Memory", select_([{ value: "persistent", label: "persistent: remembers past assignments" }, { value: "fresh", label: "fresh: starts clean each assignment" }],
-    c.memory, (v) => mutate(() => (c.memory = v)), "mem")));
-  out.push(check("Tell managers which model each report runs", c.disclose_models, (v) => mutate(() => (c.disclose_models = v)), null, "disc"));
   out.push(field("Manager turns", num(c.manager_max_turns, (v) => v && mutate(() => (c.manager_max_turns = v)), "mmt", { min: 1 })));
   out.push(field("Worker turns", num(c.worker_max_turns, (v) => v && mutate(() => (c.worker_max_turns = v)), "wmt", { min: 1 })));
   return out;
@@ -806,7 +800,6 @@ function knowledgePanel() {
         String(w.level ?? 1), (v) => upd("level", Number(v)), `w${i}-lvl`), "one wiki per position at this level, shared with everyone under it") : null,
       field("Who reads", select_([{ value: "all", label: "everyone in scope" }, { value: "managers", label: "managers only" }, { value: "workers", label: "workers only" }], w.read || "all", (v) => upd("read", v === "all" ? null : v), `w${i}-r`)),
       field("Who writes", select_([{ value: "all", label: "everyone in scope" }, { value: "managers", label: "managers only" }, { value: "workers", label: "workers only" }], w.write || "all", (v) => upd("write", v === "all" ? null : v), `w${i}-w`)),
-      check("Oversight: managers above can read it", w.oversight !== false, (v) => upd("oversight", v ? null : false), null, `w${i}-o`),
       check("Post the client's brief on it", !!w.publish_brief, (v) => upd("publish_brief", v || null), "everyone in scope can read the original assignment", `w${i}-b`),
       field("Purpose", text(w.description, (v) => upd("description", v || null), `w${i}-d`, { placeholder: "shown to agents (optional)" })),
       h("div", { class: "muted small" }, insts.length === 1 ? `${insts[0].members.length} members · ${insts[0].writers.length} can write · ${insts[0].readers.length} can read`
@@ -841,9 +834,6 @@ function commPanel() {
   out.push(h("h3", {}, "Orders"));
   const o = S.config.orders = S.config.orders || {};
   const updO = (key, val) => mutate(() => (o[key] = val));
-  out.push(field("Format", select_([{ value: "structured", label: "structured: objective, context, deliverables, constraints, done when" },
-    { value: "free", label: "free text" }], o.format || "structured", (v) => updO("format", v), "o-format"),
-    "structured orders force commanders to break work into well-constrained tasks"));
   out.push(field("To commanders", num(o.max_chars ?? 3000, (v) => updO("max_chars", v || 3000), "o-max", { min: 200, step: 100 }), "max characters per order: outcomes, not procedures"));
   out.push(field("To workers", num(o.max_chars_worker ?? 1800, (v) => updO("max_chars_worker", v || 1800), "o-max-w", { min: 200, step: 100 }), "max characters: one well-scoped task"));
   out.push(field("Reports", num(o.max_report_chars ?? 3000, (v) => updO("max_report_chars", v || 3000), "o-report", { min: 300, step: 100 }), "max characters per report going up"));
@@ -851,8 +841,6 @@ function commPanel() {
     "orders to a commander can't name the people under it; it decides who does what", "o-micro"));
   out.push(check("Reject orders that relay the commander's own orders verbatim", o.no_forwarding !== false, (v) => updO("no_forwarding", v),
     "also stops pasting orders into wikis", "o-fwd"));
-  out.push(check("Commanders wait for every report before doing anything else (blocking orders)", o.blocking === true, (v) => updO("blocking", v),
-    "off: orders run in the background, so commanders can start several units, keep working and collect reports with wait", "o-block"));
   out.push(h("h3", {}, "How"));
   const modes = c.modes || ["ask", "message"];
   const setMode = (mode, on) => upd("modes", on ? [...new Set([...modes, mode])] : modes.filter((x) => x !== mode));
@@ -1638,7 +1626,6 @@ function bindCanvas() {
   const zoom = (f) => { const r = svg.getBoundingClientRect(), cx = r.width / 2, cy = r.height / 2, k2 = Math.max(0.15, Math.min(2.5, S.view.k * f));
     S.view.x = cx - ((cx - S.view.x) * k2) / S.view.k; S.view.y = cy - ((cy - S.view.y) * k2) / S.view.k; S.view.k = k2; renderChart(); };
   $("#zoom-in").onclick = () => zoom(1.2); $("#zoom-out").onclick = () => zoom(1 / 1.2); $("#zoom-fit").onclick = () => fit(0);
-  $("#layout-mode").onchange = (e) => { S.layoutMode = e.target.value; fit(0.8); };
   let lastMode = null;
   window.addEventListener("resize", () => { renderChart(); if (S.mode !== lastMode) { lastMode = S.mode; fit(0.8); } });
 }

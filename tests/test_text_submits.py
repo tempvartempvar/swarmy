@@ -3,7 +3,6 @@
 import asyncio
 import json
 
-import pytest
 
 from swarmy.catalog import Catalog
 from swarmy.config import LevelSpec, OrgConfig

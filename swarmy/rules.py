@@ -129,8 +129,7 @@ def wiki_instances(org: OrgConfig) -> list[WikiInstance]:
                                 members=[n.name for n in members])
             inst.readers = _audience(members, spec.read)
             inst.writers = _audience(members, spec.write)
-            if spec.oversight:
-                inst.readers |= {n.name for n in overseers}
+            inst.readers |= {n.name for n in overseers}
             out.append(inst)
     return out
 

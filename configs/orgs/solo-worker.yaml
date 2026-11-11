@@ -1,5 +1,0 @@
-# Baseline: a lone wolf on a cheap model, no chain of command.
-name: solo-worker
-levels:
-  - role: lone-wolf
-    model: gpt-oss-120b

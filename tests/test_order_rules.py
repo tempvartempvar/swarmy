@@ -3,7 +3,6 @@
 import asyncio
 import json
 
-import pytest
 
 from swarmy.agents import build_tree
 from swarmy.budget import RunBudget
@@ -59,12 +58,6 @@ def test_rejects_relayed_orders_and_missing_fields(tmp_path):
     assert r.is_error and "under 500" in r.content
 
 
-def test_free_format_and_forwarding_toggle(tmp_path):
-    ctx, root = _ctx(tmp_path, orders={"format": "free", "no_forwarding": False})
-    spec = next(s for s in tool_specs(root, ctx) if s.name == "delegate")
-    assert spec.parameters["properties"]["assignments"]["items"]["required"] == ["to", "task"]
-    order, fields = ctx.tools._order_from(root, {"to": "private-1", "task": ctx.task.brief[:1500]}, ctx.agents["private-1"])
-    assert order.startswith("GreenLoop") and fields == {}
 
 
 def test_wiki_edits_and_pasted_orders(tmp_path):
@@ -86,13 +79,12 @@ def test_wiki_edits_and_pasted_orders(tmp_path):
     assert "last change: Add pump flow from doc-004" in listing
 
 
-@pytest.mark.parametrize("fmt", ["structured", "free"])
-def test_mock_runs_comply_with_rules(tmp_path, fmt):
+def test_mock_runs_comply_with_rules(tmp_path):
     from swarmy.runner import run_one
 
     org = OrgConfig.model_validate({"name": "o", "levels": [
         {"role": "captain", "model": "mock", "span": 2}, {"role": "private", "model": "mock"}],
-        "orders": {"format": fmt}, "knowledge": {"wikis": [{"name": "orders", "scope": "org"}]}})
+        "knowledge": {"wikis": [{"name": "orders", "scope": "org"}]}})
 
     async def go():
         reg = ProviderRegistry(mock=True)
