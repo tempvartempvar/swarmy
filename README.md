@@ -250,7 +250,8 @@ context: {max_tokens: 30000, keep_turns: 4, trim_to: 400}
 ### Robustness
 
 - **Turn budgets.** Agents know their budget and are warned with 3 turns left. Turns spent waiting
-  for reports don't count. A submit on the last turn is always accepted.
+  for reports don't count. On the last turn a submit skips the soft checks (status length, report
+  length, wiki reminder, orders still out); only a missing required field rejects it.
 - **Preflight.** Before a real run, each model gets one tiny tool-enabled call. A bad key, no
   credits, an unknown model or a privacy setting that excludes every provider stops the run before
   it starts, with the fix. (`--no-preflight` skips it.)

@@ -82,7 +82,8 @@ async def check_model(registry: "ProviderRegistry", spec: ModelSpec, timeout_s: 
         conv = provider.new_conversation("Connectivity check.", [_CHECK_TOOL])
         conv.add_user("Reply with the single word OK.")
         async with asyncio.timeout(timeout_s):
-            r = await provider.step(conv, spec, max_tokens=256, effort=None)
+            # Low effort keeps Claude's adaptive thinking short, so the reply fits the small cap.
+            r = await provider.step(conv, spec, max_tokens=512, effort="low" if spec.kind == "anthropic" else None)
         out.update(ok=True, text=r.text[:200], served_model=r.served_model, input_tokens=r.usage.prompt_tokens,
                    output_tokens=r.usage.output_tokens, cost_usd=spec.cost(r.usage))
     except FatalProviderError as e:
