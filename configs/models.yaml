@@ -1,46 +1,21 @@
-# Endpoints and models. Org configs refer to models by these aliases.
+# Endpoints and models. Org configs refer to models by these aliases, or inline as
+# <endpoint>:<model-id> (e.g. `ollama:qwen3:8b`). Built-in endpoints: anthropic, openrouter, openai,
+# ollama, mock (see swarmy/catalog.py). Local additions go in the git-ignored models.local.yaml
+# (the designer's Models dialog writes it). Keys never go here: name the environment variable.
 #
-# ENDPOINTS are where models are served. Built in (see swarmy/catalog.py):
-#   anthropic   Anthropic Messages API                     key: ANTHROPIC_API_KEY
-#   openrouter  OpenRouter (OpenAI-compatible)             key: OPENROUTER_API_KEY
-#   openai      OpenAI                                     key: OPENAI_API_KEY
-#   ollama      local Ollama at http://localhost:11434/v1  no key
-#   mock        offline scripted models
-# Add your own below (or in the designer: Models dialog, which writes configs/models.local.yaml).
-# `type: openai` covers any server that speaks OpenAI chat completions with tool calling:
-# vLLM, LM Studio, llama.cpp server, Together, Groq, Fireworks, Gemini's OpenAI endpoint, LiteLLM...
-# `type: anthropic` with a base_url covers Anthropic-compatible gateways and proxies.
-# Keys never go in this file: name the environment variable that holds them (put it in .env).
-#
-# MODELS: an alias -> endpoint + model id + price (USD per million tokens; used by the budget
-# guard, so set it for paid endpoints). Or skip the catalog and write a model inline in any org
-# config as <endpoint>:<model-id>, e.g. `ollama:qwen3:8b` or `openrouter:qwen/qwen3.7-flash`
-# (OpenRouter prices are looked up live).
-#
-# Model fields: endpoint, model, price {input, output, cache_read, cache_write, long-context tier},
-# max_concurrency, rpm, effort_levels, and for anthropic endpoints refusal_fallback / thinking.
-# Prices: Anthropic list prices as of 2026-10; OpenRouter snapshot 2026-11-06 (`swarmy models check`).
+# Prices are USD per million tokens and feed the budget guard: Anthropic list prices as of 2026-10,
+# OpenRouter snapshot 2026-11-06 (`swarmy models check` compares them with live prices).
 
 endpoints:
-  # vllm:
+  # vllm:                              # any OpenAI-compatible server (vLLM, LM Studio, Gemini, LiteLLM...)
   #   type: openai
   #   base_url: http://gpu-box:8000/v1
-  #   api_key_env: VLLM_API_KEY        # or omit / null if the server needs no key
-  # lmstudio:
-  #   type: openai
-  #   base_url: http://localhost:1234/v1
-  # gemini:
-  #   type: openai
-  #   base_url: https://generativelanguage.googleapis.com/v1beta/openai
-  #   api_key_env: GEMINI_API_KEY
-  #   effort_style: openai             # send reasoning effort as `reasoning_effort`
-  # claude-gateway:
+  #   api_key_env: VLLM_API_KEY        # omit if the server needs no key
+  #   effort_style: openai             # none | openai | openrouter: how to send reasoning effort
+  # claude-gateway:                    # an Anthropic-compatible gateway
   #   type: anthropic
   #   base_url: https://llm-gateway.example.com/anthropic
   #   api_key_env: GATEWAY_KEY
-  #   headers: {X-Team: research}
-  # Other options: extra_body, tools_extra_body (merged into requests), max_tokens_param
-  # (max_tokens | max_completion_tokens), live_pricing, max_concurrency, timeout_s.
 
 models:
   # ---------------- Anthropic (direct API) ----------------
@@ -61,9 +36,7 @@ models:
   haiku:
     endpoint: anthropic
     model: claude-haiku-5-5
-    # $0.10/$0.50 for prompts up to 100K tokens, $0.50/$2.50 beyond.
-    # Cache prices assume the standard 0.1x read / 1.25x write multipliers - verify on the pricing page.
-    price:
+    price:                             # higher rates above 100K prompt tokens
       input: 0.10
       output: 0.50
       cache_read: 0.01
@@ -73,11 +46,9 @@ models:
       long_output: 2.50
     max_concurrency: 12
 
-  # ---------------- OpenRouter: free (rate-limited) ----------------
-  # Free variants are rate-limited (roughly 20 req/min plus a daily cap that depends on
-  # your account's credit balance - see OpenRouter's docs). Fine for smoke tests, but a
-  # real sweep will hit the daily cap; use the cheap paid models below for sweeps.
-  # Free endpoints may log prompts. Don't send anything sensitive.
+  # ---------------- OpenRouter: free ----------------
+  # Rate-limited (~20 req/min plus a daily cap): fine for smoke tests, too slow for sweeps.
+  # Free endpoints may log prompts.
   gemma-free:
     endpoint: openrouter
     model: google/gemma-4-31b-it:free
@@ -92,28 +63,21 @@ models:
     max_concurrency: 2
     rpm: 16
 
-  # ---------------- OpenRouter: cheap paid (tool-capable) ----------------
-  # OpenRouter routes each call to a provider allowed by your privacy settings
-  # (https://openrouter.ai/settings/privacy). If your account requires Zero Data Retention (ZDR), a
-  # model with no ZDR provider fails with "0 endpoints ... matching your data policy". The list of
-  # ZDR providers per model is at https://openrouter.ai/api/v1/endpoints/zdr. gpt-oss-120b,
-  # deepseek-flash, glm-flash and haiku-or all have ZDR providers; swarmy checks each model before a
-  # real run starts.
+  # ---------------- OpenRouter: cheap paid ----------------
+  # If your account requires Zero Data Retention, only models with a ZDR provider work
+  # (https://openrouter.ai/api/v1/endpoints/zdr). All below have one except qwen-flash.
   gpt-oss-120b:
     endpoint: openrouter
     model: openai/gpt-oss-120b
     price: {input: 0.012, output: 0.044}
     max_concurrency: 16
 
-  # Has providers matching a Zero Data Retention (ZDR) account setting: see the note at the top of
-  # this section.
   glm-flash:
     endpoint: openrouter
     model: z-ai/glm-5.3-flash
-    price: {input: 0.15, output: 0.50}   # list price; OpenRouter reports the actual (often lower) cost per call
+    price: {input: 0.15, output: 0.50}   # list price; OpenRouter reports the actual cost
     max_concurrency: 16
 
-  # Only served by Alibaba, which doesn't offer ZDR: fails on accounts that require ZDR.
   qwen-flash:
     endpoint: openrouter
     model: qwen/qwen3.7-flash

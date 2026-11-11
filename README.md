@@ -1,794 +1,432 @@
 # swARMY
 
-A testbench for comparing **chains of command for swarms of LLM agents**. You describe an order
-of battle (ranks, how many subordinates each officer commands, a model and effort level per
-position), point it at a suite of coding and research tasks, and swARMY runs it under a hard dollar
-budget, grades the output, and reports quality, cost, and coordination metrics for each structure.
+A testbench for comparing **chains of command for swarms of LLM agents**. Describe an order of
+battle (ranks, how many subordinates each officer commands, a model per position), give it a task,
+and swARMY runs it under a hard dollar budget, grades the result, and shows where the money and the
+work went.
 
-Positions default to military ranks: a *Field Marshal* at the top, then generals, colonels and
-captains, with *privates* doing the hands-on work and a *lone wolf* as the single-agent baseline.
-Titles are only labels: behaviour comes from a position's place in the tree, its model, its tools
-and its goal. Rename any position to anything you like.
+- **A visual order of battle.** `swarmy ui` opens an interactive org chart. Swap any position's
+  model, add or remove ranks, define wikis and contact rules, then watch a run move through the
+  army live.
+- **Any model, any endpoint.** Anthropic, OpenRouter, OpenAI and Ollama are built in. Any
+  OpenAI-compatible or Anthropic-compatible server can be added.
+- **Structure as the variable.** Generate armies with the same number of soldiers at different
+  depths, compare them with single-agent baselines, and vary information flow (wikis, direct
+  contact) with everything else held fixed.
+- **Tasks with exact answers**, generated from a seed: coding, research, both, and a greenhouse
+  exercise that needs planning, research, simulation and testing. Or give the top position an
+  open-ended mission.
+- **Full trace.** Every order, report, model call and wiki edit is recorded, and the run explorer
+  shows how each commander split up its part.
 
-Give the Field Marshal a mission in plain words ("build a simulation of orbital dynamics across
-different orbits") and watch how it splits the work according to its forces, and how each order
-is passed down and turned into further orders until it reaches the privates.
-
-```
-field-marshal (opus, max) ─┬─ general-1 (opus) ─┬─ colonel-1.1 (sonnet) ─┬─ captain-1.1.1 (haiku) ─┬─ private-1.1.1.1 (any model)
-                           │                    │                        │                        └─ private-1.1.1.2
-                 ...                           ...                       ...
-```
-
-- **A visual order of battle.** `swarmy ui` opens an interactive org chart in your browser. You can
-  swap any position's model, add or remove positions and ranks, define wikis and communication
-  rules, watch a test run move through the org live, and read the wikis it wrote, with who changed
-  what.
-- **Any model, any endpoint.** Anthropic, OpenRouter, OpenAI and a local Ollama are built in, and any
-  OpenAI-compatible server (vLLM, LM Studio, llama.cpp, Together, Groq, Gemini, a LiteLLM gateway...) or
-  Anthropic-compatible gateway can be added. Swap models in the designer, from the CLI, in YAML, or as
-  a sweep matrix.
-- **Missions and goals.** Give the top position an open-ended mission and give any position or level a
-  standing goal. The run explorer shows the chain of orders: every order, the report that came back for
-  each, and how each commander split up its part.
-- **Knowledge sharing and communication as variables.** Wikis can be scoped to the whole org, each
-  division or each unit, with read and write permissions. Direct contact (commander to subordinate,
-  between teammates, across teams, skip-level, or fully open) can be switched on with rules such as
-  copying the skipped managers.
-- **Flatness is a parameter.** You can generate orgs with the same number of workers and different
-  depths, compare against single-agent baselines, and use a same-model control to separate the
-  effect of structure from the effect of the model mix.
-- **Tasks with exact answers.** Coding, research/QA and mixed research-plus-coding tasks are
-  generated from a seed. Nothing can be memorized, every task has an exact answer, and you can
-  dial how parallelizable each one is.
-- **Budget guard.** Every call is checked before it is sent, so a run cannot exceed its cap and a
-  sweep cannot exceed its budget (default $5).
-- **Full trace.** Every call, delegation, report and tool use goes into SQLite and a per-run
-  JSONL transcript. Each run's final workspace is kept.
+Positions default to military ranks: a *Field Marshal* on top, then generals, colonels and
+captains, and *privates* doing the hands-on work. Titles are only labels; behaviour comes from a
+position's place in the tree, its model, its tools and its goal.
 
 ## Quick start
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e '.[dev]'
-cp .env.example .env        # add ANTHROPIC_API_KEY and OPENROUTER_API_KEY
+cp .env.example .env        # add ANTHROPIC_API_KEY and/or OPENROUTER_API_KEY
 ```
-
-Open the designer:
 
 ```bash
-swarmy ui                  # http://127.0.0.1:8765
+swarmy ui                   # http://127.0.0.1:8765
 ```
 
-`swarmy ui` loads its code when it starts. After updating swarmy (`git pull`), restart it. The page
-shows a banner if the code on disk has changed since the server started.
-
-Check everything offline first. The scripted mock provider runs the whole pipeline without
-making any API calls. Mock agents don't think: every order, note and report they write is a
-labelled `[mock]` placeholder, and mock runs are marked MOCK throughout the designer.
+Check the wiring offline first. Mock runs use scripted agents that make no API calls; everything
+they write is a labelled `[mock]` placeholder.
 
 ```bash
 swarmy run --org configs/orgs/field-army.yaml --task mixed --mock
-swarmy sweep configs/sweeps/pilot.yaml --mock
-pytest
 ```
 
-Then do a real smoke test, which costs a few cents:
+Then a real smoke test, which costs a few cents:
 
 ```bash
-swarmy plan  configs/sweeps/smoke.yaml     # what will run, and the per-run caps
-swarmy sweep configs/sweeps/smoke.yaml     # asks for confirmation before spending
-swarmy report                              # latest sweep -> results/reports/<name>-<id>/report.md
+swarmy sweep configs/sweeps/smoke.yaml     # asks before spending
 ```
 
-## Worked example: the greenhouse exercise (OpenRouter only)
+After `git pull`, restart `swarmy ui`; the page shows a banner if its code is out of date.
 
-A small, end-to-end exercise that needs planning, research, simulation, product testing and
-iteration, run by a squad of cheap OpenRouter models. You only need `OPENROUTER_API_KEY` in `.env`.
+## The greenhouse exercise
 
-**The job.** GreenLoop is piloting an automatic irrigation controller for greenhouse Zone 3. The
-team has to:
+An end-to-end exercise for a squad of cheap OpenRouter models (only `OPENROUTER_API_KEY` needed).
+GreenLoop is piloting an irrigation controller for greenhouse Zone 3. The squad must:
 
-1. **Plan:** split the work between research, engineering and testing.
-2. **Research:** find, in a 16-document knowledge base, which crop and pump Zone 3 actually has, the
-   soil physics, how rain is absorbed, the quiet hours, the water budget and the acceptance criteria.
-   Some documents are traps: another zone, a superseded 2019 physics note, a memo about next year's
-   pump.
-3. **Simulate:** build `sim.py`, one hour of the zone's soil moisture, from the documented physics,
-   and use it to try controller strategies.
-4. **Product-test:** `run_tests` checks `sim.py` on sample inputs and runs `controller.py` through two
-   official 30-day weather scenarios, reporting every criterion: time in the crop's moisture band,
-   never wilting, the water budget, no pumping in quiet hours.
-5. **Iterate** until everything passes, and write up what changed in `TEST_REPORT.md`.
+1. **Research** the crop, pump, soil physics, rain, quiet hours, water budget and acceptance
+   criteria in a 16-document knowledge base. Some documents are traps: another zone, a superseded
+   note, next year's pump.
+2. **Simulate**: build `sim.py`, one hour of soil moisture, from the documented physics.
+3. **Build and test** `controller.py` against two official 30-day weather scenarios with
+   `run_tests`, and **iterate** until every criterion passes.
 
-It's graded automatically: hidden simulator checks (35%) plus six hidden 30-day scenarios (heat
-wave, rainy and dry spells...) that the controller must pass (65%). Each seed is a different
-greenhouse, and naive controllers (never water, flood by day, ignore quiet hours) score zero.
+Grading is automatic: hidden simulator checks (35%) and six hidden 30-day scenarios (65%). Each seed
+is a different greenhouse, and naive controllers score zero.
 
-**The squad** (`configs/orgs/openrouter-squad.yaml`): a Claude Haiku Field Marshal (via OpenRouter)
-commanding a research captain (DeepSeek) with two scouts, an engineering captain (DeepSeek) with two
-sappers, and a test captain (GLM) with a tester. The soldiers are gpt-oss-120b and GLM Flash. Each
-position has a goal. There's an org-wide `orders` wiki for researched facts and a log per unit.
-Captains can talk to each other, and testers can talk to sappers directly.
+`configs/orgs/openrouter-squad.yaml` is a Claude Haiku field marshal over research, engineering and
+test captains (DeepSeek and GLM), with gpt-oss and GLM soldiers. One run costs a few cents to about
+$0.30.
 
 ```bash
 swarmy run --org configs/orgs/openrouter-squad.yaml --task greenhouse --budget 1
 ```
-```bash
-swarmy orders                 # how the Field Marshal planned and handed out the work
-```
-```bash
-swarmy wiki                   # the facts the scouts recorded, and who wrote what
-```
-```bash
-swarmy log                    # what happened, call by call, and why the run ended
-```
 
-Or, in the designer, open `openrouter-squad`, choose **Greenhouse controller** in the Manoeuvres tab,
-untick mock, and watch it in the run explorer. One run usually costs a few cents to about $0.30. To
-compare structures on it (a lone Haiku, Haiku commanding four soldiers directly, and the squad),
-use the sweep, which is capped at $3:
+Or open `openrouter-squad` in the designer, pick **Greenhouse controller** in the Manoeuvres tab,
+untick mock, and watch.
 
-```bash
-swarmy sweep configs/sweeps/greenhouse.yaml
-```
+## The designer
 
-## Order of battle (the designer)
+- **Chart.** One band per rank. Each card shows a position's rank, name, model and effort. Drag to
+  move, Ctrl+scroll to zoom, collapse any command. Wide armies split each rank into rows of units
+  instead of shrinking.
+- **Ranks** edits whole levels: how many subordinates each officer commands, insert or remove a
+  rank, or build a balanced army from a few numbers.
+- **Position** edits one position (or its whole level or rank): model, effort, goal, limits, name.
+- **Wikis** and **Signals** set knowledge sharing, contact rules, order limits and context
+  trimming, and draw who can read, write or contact whom on the chart.
+- **Manoeuvres** runs the army, mock or real, under a budget. Cards light up as agents think, wait
+  and answer, and show each position's latest five-word status. Live charts show cost and work
+  (output tokens) over time for the top position, the officers and the soldiers, with a table of
+  each group's share of cost, work, input tokens and calls.
+- **Run explorer**: for any run, live or past, the chain of orders (every order, how it was split
+  further, and the report that came back), the wikis with full history and diffs, the files, and
+  the debug log.
+- **Models** lists endpoints and models, tests a model with one real call, and adds your own
+  (written to the git-ignored `configs/models.local.yaml`).
 
-```bash
-swarmy ui [--port 8765] [--orgs-dir configs/orgs]
-```
-
-- **Chart.** Each rank is a horizontal band. A card shows the position's rank, name, model
-  (coloured by family) and effort, plus counts of the wikis (▤) and contacts (⇄) it has. Drag or
-  scroll to move around, Ctrl+scroll (or pinch) to zoom, and collapse any officer's command.
-- **Layouts.** *Auto* draws a normal tree while it fits across the screen at a readable size. When it
-  doesn't, each level is split into rows of units (each commander's direct subordinates, in a frame
-  labelled with the commander), so a wide army reads top to bottom instead of shrinking to fit. You
-  can also force *Tree*, *Tree, units stacked* (each unit's soldiers in a column) or *Split levels*.
-- **Position tab.** Click a card to see who the position reports to, its direct subordinates, its
-  rough cost per call, its wiki access and who it can contact. The rank is explained in English
-  (*captain: commands a company*). You can set its standing goal and change its model, effort, limits, rank, name
-  and role notes. The scope switch applies an edit to this position only, the whole level, or every
-  position with the same rank. Buttons add a subordinate, duplicate the position (with its unit),
-  insert an officer above it, or remove it.
-- **Ranks tab.** Change how many subordinates each officer at a level commands (− / +), insert a
-  rank below a level (each officer's subordinates are split among new officers, titled with the next
-  rank down), remove a level, edit a whole level at once, or build a balanced army from a few
-  numbers.
-- **Wikis tab.** Add wikis and set their scope, who can read and write them, oversight, and whether
-  the client's brief is posted on them. Selecting a wiki outlines each copy of it on the chart and
-  marks who can write (solid border) and who can only read (dashed border).
-- **Signals tab.** Toggle the contact rules and set the skip-level distance. Selecting a position
-  draws a line to every colleague it may contact, coloured by type.
-- **Manoeuvres tab.** Run the org on a task, in mock mode or with real models under a hard budget,
-  and watch it live. Agents light up while they think, wait or answer; orders and reports flash along
-  the edges; messages arc between cards; and an activity feed shows orders, reports, questions with
-  their answers, and wiki edits as they happen.
-  - **Live cost and work charts.** Two charts share one time axis and the same split into the top
-    position, the other officers and the soldiers (the top edge is the total):
-    - **cost**, against the budget, with a dashed budget line once spending passes half of it;
-    - **work**, measured in output tokens: what the models generated, including reasoning.
-
-    Hovering either chart shows the split at that moment on both. A small table compares each
-    group's share of cost, work, input tokens and calls, which shows whether a group is expensive
-    because it does the work, or because it re-reads long contexts on pricier models. A table below
-    lists each position's model, calls, tokens in and out, cost and last status.
-  - **Status updates.** Every agent finishing an order gives a status of at most five words
-    ("Pump specs verified and recorded"). Each card shows its position's latest status during the
-    run, in place of the model badge (a checkbox switches back). Statuses also appear in the feed,
-    the chain of orders, the run log, and the header of each report a commander receives.
-- **Run explorer.** Inspect any run, live or past:
-  - *Chain of orders*: the mission at the top, then every order each commander issued, nested under the
-    order it came from, with each recipient's standing goal, the full order, how it was split further,
-    and the report that came back.
-  - *Wikis*: every page, who last edited it (rank, level, model), all contributors, the full revision
-    history with a diff per edit, and a filter by rank.
-  - *Files*: everything the run left in its workspace.
-- **Models.** List endpoints (with whether their API key is set) and models, add your own endpoints and
-  models, and test any model with one short real call. Additions go to `configs/models.local.yaml`.
-- **Save** writes `configs/orgs/<name>.yaml`, using the compact `levels` form when the tree is
-  uniform and an explicit `tree` otherwise. **YAML** shows the config and lets you paste one in.
-  Undo and redo cover every edit.
-
-The designer gets everything it shows (names, metrics, contacts, wiki membership) from the same
-code the engine runs, so the chart always matches what the agents will do.
+**Save** writes `configs/orgs/<name>.yaml`. The designer computes names, contacts and wiki
+membership with the same code the engine runs, so the chart always matches what agents will do.
 
 ## Org configs
 
 ```yaml
-# configs/orgs/regiment.yaml
 name: regiment
-levels:                     # top to bottom; every position in a level shares its settings
-  - role: colonel           # any title; positions are named <role>-<path>, e.g. captain-1, private-1.2
-    model: sonnet           # alias from configs/models.yaml, or openrouter:<id> / anthropic:<id>
-    effort: low             # low | medium | high | xhigh | max  (Claude effort / OpenAI-style reasoning effort)
-    goal: Keep the regiment's work tested and documented.   # optional standing objective
-    span: 2                 # direct subordinates per position
+levels:                    # top to bottom; every position in a level shares its settings
+  - role: colonel          # positions are named <role>-<path>: captain-1, private-1.2, ...
+    model: sonnet          # an alias from configs/models.yaml, or <endpoint>:<model-id>
+    effort: low            # low | medium | high | xhigh | max
+    goal: Keep the regiment's work tested and documented.
+    span: 2                # direct subordinates per position
   - role: captain
     model: haiku
     span: 3
-  - role: private           # bottom level: span 0, does the hands-on work
+  - role: private          # the bottom level does the hands-on work
     model: gpt-oss-120b
-memory: persistent          # persistent: an agent remembers earlier assignments; fresh: starts clean each time
 ```
 
-For uneven structures or per-position models, write an explicit `tree` instead of `levels`
-(see `configs/orgs/general-staff.yaml`):
+For uneven structures or per-position models, write a `tree` instead (see
+`configs/orgs/general-staff.yaml`): each node has `role`, `model`, optional `name` and `children`.
+
+Optional per position or level: `goal`, `effort`, `max_turns`, `max_tokens`, `prompt` (extra
+instructions), `can_do_work` (hands-on tools for an officer) and `review_tools` (officers may read
+files and run public tests; on by default). Org-wide: `manager_max_turns` and `worker_max_turns`.
+
+```bash
+swarmy org configs/orgs/field-army.yaml     # tree and flatness metrics
+```
+
+**Missions.** Give the top position any open-ended objective, with an empty workspace and no
+grading, then read how it was carried out:
+
+```bash
+swarmy run --org configs/orgs/field-army.yaml --budget 3 --mission "Build a simulation of orbital dynamics for LEO, MEO, GEO and a Molniya orbit, with plots."
+```
+
+```bash
+swarmy orders      # the chain of orders as an outline (--full for whole texts)
+```
+
+## How the army works
+
+### Orders
+
+Commanders give orders with `delegate`. Every order is a structured, well-constrained task:
+
+| field (characters) | holds |
+|---|---|
+| `objective` (required, 500) | the single outcome to achieve |
+| `context` (2000) | only the facts this subordinate needs, distilled, or a pointer to a wiki page |
+| `deliverables` (required, 1200) | exactly what to hand back, and in what form |
+| `constraints` (1200) | interfaces, limits, what not to do |
+| `done_when` (required, 600) | the test that shows it's finished |
+
+- **Orders run in the background.** `delegate` returns at once, so a commander can start several
+  units and keep working. Reports arrive as subordinates finish, at its next turn or through
+  `wait`, which also wakes for a direct message. A subordinate takes one order at a time. A
+  commander can't submit while orders are out; if it stops anyway, late reports are passed up with
+  its own.
+- **Scoped orders.** Orders to hands-on workers are shorter than orders to commanders. Commanders
+  are told to give outcomes, not procedures.
+- **No micromanagement.** An order to a commander that names anyone under it is rejected: that
+  commander decides who does what.
+- **No relaying.** Orders (and wiki edits) that repeat the commander's own orders verbatim are
+  rejected.
+- **Reports** are limited in length and end with a status of at most five words, shown on the chart.
+
+Limits allow 10% over before rejecting, since a rejection costs a whole call.
 
 ```yaml
-tree:
-  role: field-marshal
-  model: sonnet
-  goal: Split work so intelligence and engineering run in parallel.
-  children:
-    - role: colonel
-      name: intelligence-colonel   # optional custom name (default: <role>-<path>, e.g. colonel-1)
-      model: haiku
-      children: [{role: scout, model: gpt-oss-120b}, {role: scout, model: "ollama:qwen3:8b"}]
-    - {role: sapper, model: haiku}
+orders:
+  max_chars: 3000          # orders to commanders
+  max_chars_worker: 1800   # orders to hands-on workers
+  max_report_chars: 3000
+  no_micromanaging: true
+  no_forwarding: true
 ```
 
-### Ranks
-
-The generator and the designer title positions by depth, always with the Field Marshal on top:
-field-marshal, general, lieutenant-general, major-general, brigadier, colonel, lieutenant-colonel,
-major, captain, lieutenant, sergeant, corporal, lance-corporal. Hands-on positions are *privates*,
-and a single-agent org is a *lone wolf*. Two levels give a Field Marshal over captains, three add
-colonels in between, four add generals. Inserting a layer in the designer picks the next rank
-down. The list lives in `swarmy/ranks.py`.
-
-### Goals and missions
-
-Any position (or a whole level) can have a standing `goal`. It goes into that agent's instructions
-("pursue it alongside the orders you receive"), and commanders see their subordinates' goals.
-Commanders are also told their forces: each direct subordinate's rank, model and effort, and how
-many positions and hands-on soldiers it commands. So the Field Marshal can give the heavy
-work to the general with the bigger army or the stronger model. Set `disclose_models: false` to
-hide models (useful for some experiments).
-
-A **mission** is an open-ended objective for the top position, with an empty shared workspace and
-no automatic grading:
-
-```bash
-swarmy run --org configs/orgs/field-army.yaml --budget 3 \
-    --mission "Build a simulation of orbital dynamics for satellites in LEO, MEO, GEO and a Molniya orbit, comparing periods and ground tracks, with plots."
-```
-```bash
-swarmy orders            # the chain of orders of the latest run, as an indented outline (--full for whole texts)
-```
-
-In the designer, write the mission in the Manoeuvres tab, then open **Chain of orders** to watch it
-cascade down live. What gets built ends up in `results/runs/<run_id>/workspace/` and in the
-explorer's Files tab.
-
-### Knowledge sharing
+### Wikis
 
 ```yaml
 knowledge:
   wikis:
-    - name: orders
-      scope: org              # org | department | team
-      write: managers         # who can write: all | managers (officers) | workers (hands-on)
-      read: all               # who can read
-      publish_brief: true     # post the client's original assignment on it
-      description: Orders and plans from the staff.
-    - name: unit-log
-      scope: team             # one wiki per unit: an officer plus their direct subordinates
-      oversight: true         # officers above the unit can read it (default)
-    - name: division-file
-      scope: department
-      level: 1                # one wiki per level-1 position (a division), shared by everyone under it
+    - {name: orders, scope: org, write: managers, publish_brief: true}   # one wiki for everyone
+    - {name: unit-log, scope: team}                   # one per officer and its direct subordinates
+    - {name: division-file, scope: department, level: 1}   # one per level-1 position and everyone under it
 ```
 
-Agents get `wiki_read`, `wiki_search` and (where permitted) `wiki_write` for the wikis they can
-reach. Wikis are meant to be a curated knowledge base, not a log:
-- Agents are told to keep one short, sourced page per topic (facts, interfaces, plan, test results).
-- `wiki_write` replaces the page with an improved version unless `append` is set (for log pages).
-- Every edit needs an **edit summary**, and edits that change nothing are skipped.
-- Pasting orders into a page is rejected.
-- Before accepting a report from an agent that can write to a wiki but hasn't during its assignment,
-  swarmy reminds it once to record what others need. It can then submit straight away. Turn this off
-  with `knowledge: {remind_before_submit: false}`.
-- If a run ends with no pages, the explorer's Wikis tab and `swarmy wiki` show the wiki activity
-  instead: reads, writes, and every rejected call with its reason.
+`read` and `write` are `all`, `managers` or `workers`; commanders above a wiki's scope can always
+read it. Agents are told to keep a curated knowledge base, not a log: one short, sourced page per
+topic, read before writing, replaced with an improved version, with an edit summary.
 
-Every page an agent reads shows who last edited it, the last edit summary, and all contributors with
-their ranks.
-
-Each run's wikis are a **git repository** (`runs/<run_id>/wiki/`): one folder per wiki, one
-Markdown file per page, and **one commit per edit**. The commit author is the agent and its rank
-(`captain-1.2 (captain)`), the message is the edit summary, and trailers record the wiki, page,
-rank, level, model, kind of edit (create, replace or append) and when in the run it happened.
-History, diffs and blame therefore come from git itself. To read them:
-
-- the **run explorer** in `swarmy ui` (live or past runs, with history and diffs);
-- `swarmy wiki [RUN] [--wiki ID] [--page TITLE]` on the command line;
-- any git tool, for example:
+Each run's wikis are a **git repository** (`results/runs/<run_id>/wiki/`): a folder per wiki, a
+Markdown file per page, a commit per edit, authored by the agent and its rank. Browse them in the
+run explorer, with `swarmy wiki`, or with any git tool:
 
 ```bash
 git -C results/runs/<run_id>/wiki log --format='%h %an: %s' -p
 ```
 
-The custom code is only the permission layer (who can read or write which wiki, in
-`swarmy/rules.py`). Storage uses [dulwich](https://www.dulwich.io/) (pure-Python git, so no git
-binary is needed and your own git config, signing and hooks are never used), diffs use `difflib`,
-and Markdown is rendered on the server with [markdown-it-py](https://github.com/executablebooks/markdown-it-py)
-(raw HTML is escaped). Runs from earlier versions, saved as `wikis/wikis.json`, still open in the
-explorer.
+### Direct contact
 
-### Orders
-
-Commanders give orders with `delegate`. By default orders are **structured**, a simplified military
-orders format, so every order is a well-constrained task rather than a forwarded brief:
-
-| field (limit) | what it holds |
-|---|---|
-| `objective` (required, 500) | the single outcome this subordinate must achieve |
-| `context` (2000) | only the facts it needs, distilled, in the commander's own words (or a pointer to a wiki page) |
-| `deliverables` (required, 1200) | exactly what to hand back: files, facts, decisions, and in what form |
-| `constraints` (1200) | interfaces, limits, rules, what not to do |
-| `done_when` (required, 600) | the test that shows the task is finished |
-
-Orders that repeat long passages of the commander's own orders verbatim are rejected, with a message
-telling it to decide the plan and pass on only what each subordinate needs. The same check stops
-agents pasting orders into wikis. All of this is configurable, so it can be an experimental variable:
-
-```yaml
-orders:
-  format: structured       # structured | free (a single free-text task)
-  max_chars: 3000          # orders to commanders: outcomes, not procedures
-  max_chars_worker: 1800   # orders to hands-on workers: one well-scoped task
-  max_report_chars: 3000   # reports going up
-  no_micromanaging: true   # orders to a commander can't name the people under it
-  no_forwarding: true      # reject verbatim relaying of one's own orders
-  blocking: false          # false: orders run in the background (see below)
-```
-
-**Scoped orders, no micromanagement.** Orders to hands-on workers get a lower length limit than
-orders to commanders. A worker's order should be one well-scoped task, with the next one sent when
-it reports, rather than one long order. Commanders are told to give outcomes, not procedures: what
-must be achieved, why, the constraints, and how the work will be judged, leaving the how to the
-subordinate. With `no_micromanaging`, an order to a commander that names anyone under it (for
-example the field marshal assigning work to `scout-1.1` in an order to the research captain) is
-rejected: the captain decides who does what. Reports going up have a limit too. An over-long report
-is rejected once with advice, then cut to the limit, and on an agent's last turn it's cut without a
-rejection.
-
-Field limits, order limits and the message limits below all allow 10% over before rejecting. A
-rejection costs a whole call, so being a few characters over shouldn't trigger one.
-
-**Orders run in the background.** `delegate` returns at once, and each order is worked on in
-parallel while the commander keeps going. It can start other units, check files, update the wiki,
-or answer questions. Reports arrive as subordinates finish: they're shown at the start of the
-commander's next turn, or it can call `wait` to wait for any report (or `for: all`). A direct
-message or cc also ends a wait, so a commander can react to news such as "the facts page is up". A
-subordinate takes one order at a time. A commander can't submit while orders are still out, except
-on its last turn. If it stops with orders out (turn limit, error), its late reports are collected
-and passed up with its own. Commanders are told to start every unit that can begin now. A unit that
-needs another's results gets a preparatory order now (reading the spec, scaffolding, test cases) and
-its real order once the inputs exist, because work done before the inputs exist is done with guesses.
-
-With `blocking: true`, `delegate` waits for every report before returning, and the commander can't
-act in the meantime. In one real run under that mode, the field marshal ordered engineering to "wait
-for the research facts" before research had any orders, and research sat idle for nearly four
-minutes. Keep the setting the same across the structures you compare.
-
-The run explorer's chain of orders shows each order's objective in the outline and its sections in
-full. The **Signals** tab in the designer has the same settings.
-
-### Check-ins
-
-When the top position stops before the mission is done, the client checks in with it, the way a
-real client would. It asks whether the mission is finished and tells it to keep working if not.
-Check-ins happen when the top position:
-
-- runs out of turns, stops calling tools, or is stopped by an error, without calling `submit`; or
-- submits while the task's public tests still fail. These are the same tests agents run with
-  `run_tests`, so check-ins never reveal the hidden grading cases.
-
-The check-in shows the reason and the current public test output. The top position keeps its
-conversation, gets a fresh set of turns, and can give its forces new orders. Their notes, the wikis
-and the workspace are all still there.
-
-```yaml
-checkins:
-  max: 2                  # 0 turns them off
-  verify_tests: true      # also check in when the public tests fail after a submit
-  min_budget_frac: 0.15   # only start one with at least 15% of the budget and time limit left
-```
-
-Check-ins are part of the setup you're measuring, so keep them the same across the structures you
-compare. A check-in cut short by the budget or time limit keeps the report the run already had.
-They're set in the Manoeuvres tab, and the chain of orders shows each one under the mission.
-
-### Run logs and why runs end
-
-Every run writes `runs/<run_id>/run.log`, a plain-text log with the time since the start, for
-debugging. It records:
-
-- every model call: tokens, cost, latency, stop reason, the tools it called, and any retries with
-  their reasons;
-- every order and report, wiki edit and message;
-- every failed tool call, provider error, and internal error with its traceback;
-- check-ins, and finally why the run ended, in plain words.
-
-You can read it in four places:
-
-- the explorer's **Log** tab, which jumps to errors and warnings and refreshes while the run is
-  live;
-- `swarmy log [RUN]` (add `--all` for every call);
-- live in the terminal with `swarmy run ... -v`, or `-vv` for every call;
-- the `swarmy ui` terminal, which prints one line when a run starts and ends.
-
-The end reason is also in `result.json` (`end_reason`), in the designer's result box, and in the
-`runs` table.
-
-**Turn budgets.** Each agent is told its turn budget, which is model calls per order
-(`manager_max_turns`, `worker_max_turns`, or a position's `max_turns`). It's warned when 3 turns
-are left and told when it's on its last. Turns that only `wait` for reports don't count. On the last
-turn, a submit is always accepted: the one-time wiki reminder and the five-word status rule don't
-apply, and reports from orders still out are passed up with it. Without these rules, finished work
-was lost as "Ran out of turns".
-
-**The wiki reminder** (`knowledge.remind_before_submit`) is skipped when the agent has written
-files during the order, since its results are already in the workspace and a copy would only
-duplicate them. A `wiki_write` without a page title takes the first Markdown heading of its content.
-Page listings quote titles, and lookups ignore a trailing version note such as "(v2", so a
-misread title doesn't cost a turn.
-
-**Runaway replies.** When a reply hits the output limit without calling a tool, the agent is told
-exactly that: keep the reasoning short, call one tool, and write long content to files in parts.
-The generic "use your tools" reminder is used otherwise.
-
-**Tool calls written as text.** Some models (gpt-oss, for one) sometimes write a tool call as
-plain text instead of making it, such as `{"report": "...", "status": "..."}` or
-`{"name": "submit", "arguments": {...}}`. A submit written this way is recovered and accepted, and
-the run log records that it happened. After any plain-text reply, the next call on an
-OpenAI-compatible endpoint sets `tool_choice: "required"`, falling back to `auto` if the endpoint
-refuses it, so the agent has to make a real tool call.
-
-**Status updates.** `submit` takes a required `status` of at most five words, so finishing an order
-also produces a one-line update at no extra cost. A missing or longer status is rejected once with
-an example. If it happens again, the first five words are kept, so this field never blocks real
-work. Orders that end without a submit get a standard status, such as "Ran out of turns" or
-"Stopped by an error".
-
-Before a real run, swarmy checks every model the org uses with one tiny tool-enabled call each,
-sent in parallel the way agents will call it. This costs a fraction of a cent, and a model that
-passed in the last 30 minutes isn't checked again. If a model can't be used, the run stops before
-the mission is issued, and the end reason lists every such model, which positions use it, and how
-to fix it. A bad key, missing credits, an unknown model, or an OpenRouter privacy setting that
-excludes all of a model's providers would otherwise only show up when that position first acts. Use
-`--no-preflight` to skip the check.
-
-**OpenRouter privacy settings.** If your account requires Zero Data Retention (ZDR) at
-[openrouter.ai/settings/privacy](https://openrouter.ai/settings/privacy), only models with a ZDR
-provider work. Other models fail with "0 endpoints ... matching your guardrail restrictions and
-data policy". The bundled `openrouter-squad` only uses models that have ZDR providers.
-[openrouter.ai/api/v1/endpoints/zdr](https://openrouter.ai/api/v1/endpoints/zdr) lists them for
-every model.
-
-Only two kinds of error end a run early: the endpoint refusing it (bad key, no credits, unknown
-model, data-policy mismatch) and the budget running out. Anything else is contained where it
-happens. A tool that hits an unexpected error (reading a binary file, writing to a directory)
-returns the error to the agent. An agent whose loop breaks reports the error to its commander, who
-can retry or reassign. Each of these is logged with its traceback and counted as a crash in the
-summary.
-
-### Communication rules
-
-Assignments always flow down the tree (`delegate`) and reports flow up (`submit`). These rules add
-direct contact, and all of them are off by default:
+Orders flow down and reports flow up. These rules add direct contact; all are off by default.
 
 ```yaml
 communication:
-  chain: true          # commander <-> direct subordinate, mid-assignment
-  peers: true          # comrades in the same unit (same commander)
-  cross_team: false    # same rank, different unit
-  open: false          # anyone may contact anyone
-  skip_up: 1           # may contact up to 1 rank above their own commander
-  skip_down: 0         # officers may contact up to N ranks below their direct subordinates
-  cc_skipped: true     # skipped officers get a copy of skip-level traffic
+  chain: true          # commander <-> direct subordinate, mid-order
+  peers: true          # same commander
+  cross_team: false    # same rank, different commander
+  open: false          # anyone with anyone
+  skip_up: 1           # up to N ranks above one's own commander
+  skip_down: 0         # officers: up to N ranks below their direct subordinates
+  cc_skipped: true     # skipped officers get a copy
   modes: [ask, message]
   max_messages: 8      # per agent per run
   max_message_chars: 1500
   max_question_chars: 800
-  max_answer_tokens: 600   # answers to questions are short
+  max_answer_tokens: 600
 ```
 
-A message or question over its limit is rejected without using up the agent's allowance, with a
-request to send the gist and point to a file or wiki page for details.
+`ask` gets an answer from a side conversation forked from the colleague's own history, so it
+reflects what they know without interrupting them. `send_message` leaves a note they see next time
+they act.
 
-### Context trimming
+### Check-ins
 
-Conversations grow with every tool result. In one real run a soldier was sending about 85k input
-tokens per call by the end, mostly old `run_python` output. When an agent's context passes
-`context.max_tokens` (an estimate), the following are cut to a short stub ending in "re-read the
-file or re-run the tool if you need them":
-
-- older tool output;
-- messages and reports it has already seen;
-- the bulky arguments of old tool calls, such as the full content of files it wrote.
-
-Its orders and its last `keep_turns` turns stay intact, and thinking blocks are never touched.
-Trimming happens all at once, down to about 60% of the limit, so prompt caching keeps working for
-the several turns until the next trim. The run log and feed record each trim.
+When the top position stops before the job is done (out of turns, stopped calling tools, an error,
+or submitted while the public tests still fail), the client checks in: it gives the reason and the
+public test output, and asks it to finish or keep going. It keeps its conversation and gets fresh
+turns.
 
 ```yaml
-context:
-  max_tokens: 30000   # estimated input tokens before trimming
-  keep_turns: 4       # most recent turns kept intact
-  trim_to: 400        # characters kept from each trimmed item
+checkins:
+  max: 2                  # 0 turns them off
+  verify_tests: true      # also check in when public tests fail after a submit
+  min_budget_frac: 0.15   # only with at least 15% of the budget and time left
 ```
 
-- `ask` asks a colleague a question and waits for the answer. The colleague answers in a side
-  conversation forked from their own history, so the answer reflects what they actually know; their
-  main work isn't interrupted, and they get an FYI note about the exchange.
-- `send_message` leaves a note that the recipient sees the next time they act. Notes that are never
-  read are counted as `undelivered`.
+### Context
 
-Each agent's tools list exactly the colleagues it may contact, and its prompt says how each one
-relates to it (commander, comrade, skip-level and so on).
-
-Optional level fields: `max_tokens`, `max_turns`, `can_do_work` (gives managers hands-on
-tools as well), `review_tools` (lets managers read the workspace and run the public tests;
-on by default), and `prompt` (extra role instructions).
-
-To see an org's tree and flatness metrics:
-
-```bash
-swarmy org configs/orgs/field-army.yaml
-```
-
-### Swapping models
-
-```bash
-# per role (or 'top' / 'bottom'), on any command
-swarmy run --org configs/orgs/field-army.yaml --task code \
-    --model private=openrouter:qwen/qwen3.7-flash --model field-marshal=sonnet --effort colonel=high
-# any field, by dotted path
-swarmy run --org configs/orgs/regiment.yaml --task qa:kind=aggregate --set levels.1.span=4 --set communication.peers=true
-```
-
-In a sweep, `models:`, `efforts:` and `set:` apply fixed overrides, and `matrix:` expands into
-a Cartesian product (see `configs/sweeps/model-swap.yaml`):
+When an agent's context passes `max_tokens`, older tool output, messages, reports and the content
+of old tool calls (files it wrote) are cut to a short stub. Its orders and last `keep_turns` turns
+stay intact. Trimming happens in one go, to about 60% of the limit, so prompt caching keeps working
+between trims.
 
 ```yaml
-orgs:
-  - path: configs/orgs/regiment.yaml
-    matrix:
-      private: [gpt-oss-120b, glm-flash, haiku]
-      effort.colonel: [low, medium]
+context: {max_tokens: 30000, keep_turns: 4, trim_to: 400}
 ```
 
-### Endpoints and models
+### Robustness
 
-Models are served by **endpoints**. Built in:
+- **Turn budgets.** Agents know their budget and are warned with 3 turns left. Turns spent waiting
+  for reports don't count. A submit on the last turn is always accepted.
+- **Preflight.** Before a real run, each model gets one tiny tool-enabled call. A bad key, no
+  credits, an unknown model or a privacy setting that excludes every provider stops the run before
+  it starts, with the fix. (`--no-preflight` skips it.)
+- **Contained failures.** Only an endpoint refusal or an empty budget ends a run early. A tool
+  error goes back to the agent; a broken agent reports an error to its commander.
+- **Model quirks.** A submit written as text instead of a tool call is recovered; after a
+  plain-text reply, OpenAI-compatible endpoints are asked for a tool call; a reply that hits the
+  output limit gets a specific reminder.
 
-| endpoint | type | key (in `.env`) |
+## Runs and logs
+
+```
+results/
+  swarmy.db                  # sweeps, runs, calls, events (SQLite)
+  runs/<run_id>/run.log      # debug log: every call, error, check-in, and why the run ended
+  runs/<run_id>/transcript.jsonl   # every input, step and tool result
+  runs/<run_id>/workspace/   # the files the run produced
+  runs/<run_id>/wiki/        # the wikis, as a git repository
+  runs/<run_id>/result.json  # grade, cost per position, end reason
+  reports/<sweep>-<id>/      # report.md, charts, runs.csv, levels.csv
+```
+
+```bash
+swarmy log [RUN]           # the debug log (--all for every call); `swarmy run -v` streams it live
+```
+
+```bash
+swarmy orders [RUN]        # the chain of orders
+```
+
+```bash
+swarmy wiki [RUN]          # wiki pages and who edited them
+```
+
+## Models and endpoints
+
+| endpoint | serves | key in `.env` |
 |---|---|---|
-| `anthropic` | Anthropic Messages API (streaming, adaptive thinking, effort, prompt caching) | `ANTHROPIC_API_KEY` |
-| `openrouter` | OpenAI-compatible, hundreds of models, live prices and real cost per call | `OPENROUTER_API_KEY` |
+| `anthropic` | Claude (streaming, adaptive thinking, effort, prompt caching) | `ANTHROPIC_API_KEY` |
+| `openrouter` | hundreds of models; reports the real cost of each call | `OPENROUTER_API_KEY` |
 | `openai` | OpenAI | `OPENAI_API_KEY` |
-| `ollama` | local Ollama at `http://localhost:11434/v1` | none |
-| `mock` | offline scripted models | none |
+| `ollama` | local models at `localhost:11434` | none |
+| `mock` | scripted offline agents | none |
 
-Add your own in `configs/models.yaml`, or in the designer's **Models** dialog, which writes the
-git-ignored `configs/models.local.yaml`:
+Add endpoints and models in `configs/models.yaml` or the Models dialog:
 
 ```yaml
 endpoints:
   vllm:
-    type: openai                      # any OpenAI-compatible chat-completions server
+    type: openai                  # openai (chat completions) or anthropic (Messages API)
     base_url: http://gpu-box:8000/v1
-    api_key_env: VLLM_API_KEY         # name of the env var holding the key; omit if none
-    effort_style: none                # none | openai (reasoning_effort) | openrouter (reasoning: {effort})
-    max_tokens_param: max_tokens      # or max_completion_tokens (newer OpenAI models)
-  claude-gateway:
-    type: anthropic                   # an Anthropic-compatible proxy or gateway
-    base_url: https://llm-gateway.example.com/anthropic
-    api_key_env: GATEWAY_KEY
-    headers: {X-Team: research}
+    api_key_env: VLLM_API_KEY     # omit if none
 models:
   big-local:
     endpoint: vllm
     model: Qwen/Qwen3-32B
-    price: {input: 0, output: 0}      # set real prices for paid endpoints so the budget guard works
+    price: {input: 0, output: 0}  # USD per million tokens; needed for the budget guard
 ```
 
-Any position can also name a model inline as `<endpoint>:<model-id>` (`ollama:qwen3:8b`,
-`openrouter:qwen/qwen3.7-flash`). OpenRouter prices are looked up live; local endpoints count as free;
-other endpoints need a price in the catalog, or the budget guard can't limit them. Hands-on models must
-support tool calling.
+Any position can also name a model inline, as `<endpoint>:<model-id>`
+(`openrouter:z-ai/glm-5.3-flash`, `ollama:qwen3:8b`). Hands-on models must support tool calling.
 
 ```bash
-swarmy models endpoints          # endpoints and whether their keys are set
+swarmy models               # endpoints (with key status) and models
 ```
-```bash
-swarmy models test big-local     # one short real call to check it works
-```
-```bash
-swarmy models check              # compare catalog prices with OpenRouter's live prices
-```
-
-### Generating structures that vary only in depth
-
-```yaml
-- generate:
-    name: armee
-    workers: 8              # hands-on positions, held constant
-    depths: [1, 2, 3, 4]    # ranks of officers above them
-    include_solo: true      # also add a lone-wolf baseline
-    ladder:                 # officer tiers, top-down (omit `role` to get default ranks)
-      - {role: field-marshal, model: opus, effort: max}
-      - {role: general, model: opus, effort: medium}
-      - {role: colonel, model: sonnet}
-      - {role: captain, model: haiku}
-    worker: {model: gpt-oss-120b}   # titled private unless you set a role
-```
-
-Spans are split as evenly as possible, with larger spans at the bottom: 8 workers at depth 3
-gives 1-2-4-8. If the worker count runs out of factors, the upper levels get span 1 (a pure
-relay layer, which tests the "telephone game" effect). When a structure is flattened, tiers
-are removed from the middle and the top tier is always kept. A one-entry `ladder` gives every
-manager the same model.
-
-## Tasks
-
-| family | spec | what it tests | parallelizable? |
-|---|---|---|---|
-| `qa` | `qa:kind=chain,hops=2..4` | sequential multi-hop lookup | barely: each hop depends on the last |
-| `qa` | `qa:kind=aggregate,n=6` | n independent 2-hop lookups, then an argmax | fully |
-| `qa` | `qa:kind=census` | scan many docs, filter, count | by partitioning the docs |
-| `code` | `code:n=6,coupling=0.3` | implement n precisely specified functions (one module each) against hidden tests | `coupling` sets how many functions build on others: 0 = independent, 1 = chains |
-| `mixed` | `mixed:products=5,cities=4,rules=5` | find pricing, shipping and tax policy in the knowledge base, then implement `quote(order)` | research fans out; the code needs everything put together |
-| `greenhouse` | `greenhouse` (vary `--seed`) | research a greenhouse, build a simulator and an irrigation controller, product-test against 30-day scenarios, iterate (see the worked example) | research and building in parallel, then test and fix loops |
-| `mission` | `swarmy run --mission "..."` | any open-ended objective you write; ungraded | whatever the commanders decide |
-
-All tasks are generated from the seed in the spec. The world is a fictional set of countries,
-cities, companies, people and products, written up as about 110 short documents. Facts are
-spread across documents (for example, a company's CEO appears only on that person's page) and
-there are distractor news items. Code specs use randomized parameters, so the specs differ from
-seed to seed. Grading is exact: QA answers are normalized and matched, and code is scored by the
-fraction of hidden tests passed, in a subprocess.
-
-To read a task brief and its gold answer:
 
 ```bash
-swarmy task qa:kind=chain,hops=4 --seed 3 --gold
+swarmy models check         # compare catalog prices and tool support with OpenRouter
 ```
 
-## Sweeps and budgets
+```bash
+swarmy models test glm-flash   # one short real call
+```
+
+**OpenRouter privacy settings.** If your account requires Zero Data Retention, only models with a
+ZDR provider work ([list](https://openrouter.ai/api/v1/endpoints/zdr)). Every model in
+`openrouter-squad` has one.
+
+To swap models without editing files, use `--model ROLE=MODEL` (or `top` / `bottom`),
+`--effort ROLE=EFFORT` and `--set path=value` with `swarmy run` and `swarmy org`:
+
+```bash
+swarmy run --org configs/orgs/regiment.yaml --task code --model private=glm-flash --set levels.1.span=4
+```
+
+## Sweeps
+
+A sweep runs several orgs on several tasks under one budget.
 
 ```yaml
 name: pilot
-budget_usd: 5.0          # hard ceiling for the whole sweep
-run_budget_usd: null     # default: budget / number of runs (an org entry can override)
+budget_usd: 5.0            # hard ceiling for the whole sweep
 concurrency: 3
-repeats: 1
-orgs: [...]
+orgs:
+  - path: configs/orgs/regiment.yaml
+    matrix: {private: [gpt-oss-120b, glm-flash], effort.colonel: [low, medium]}
+  - generate:              # same soldiers, different depths
+      name: army
+      workers: 8
+      depths: [1, 2, 3]
+      include_solo: true   # plus a single-agent baseline
+      ladder: [{model: sonnet}, {model: haiku}]   # officer tiers, top down
+      worker: {model: gpt-oss-120b}
 tasks:
   - {family: code, params: {n: 6, coupling: 0.3}, seeds: [1, 2]}
 ```
 
-How the guarantees work:
-
-- **Per call.** Before each request, `max_tokens` is clamped to what the run can still afford,
-  assuming the worst case (the whole prompt billed as a cache write and every output token
-  used). When the run can't afford 1,024 output tokens, it stops with status
-  `budget_exhausted`, and whatever it produced is still graded.
-- **Per sweep.** Each run reserves its cap before it starts and returns the unused part when it
-  finishes, so concurrent runs can't overshoot the budget. Runs that don't fit are recorded as
-  `skipped_budget`.
-- **Run order.** Runs are interleaved (seed, then task, then org). If the budget runs out
-  part-way, every org still has results on the same tasks.
-- `swarmy plan` warns when a level's single call could cost more than half the run cap. For
-  example, an Opus max-effort call with 32k output costs about $0.66.
-- Real sweeps ask for confirmation (`--yes` skips the prompt). If a fatal provider error happens
-  (bad key, unknown model, free-tier daily quota used up), the sweep stops.
-
-### Rough per-call costs
-
-These assume about 8k prompt tokens (mostly cached) and 1.5k output tokens:
-
-| model | ≈ $/call | notes |
-|---|---|---|
-| Opus 5.5 | 0.03-0.05 | max effort can produce 10k+ thinking tokens, which is $0.20+ per call |
-| Sonnet 5.5 | 0.015-0.025 | |
-| Haiku 5.5 | ~0.001 | cheap enough for multi-seed sweeps |
-| gpt-oss-120b / glm-flash (OpenRouter) | ~0.0003-0.002 | good default workers |
-| `:free` models | 0 | rate-limited (~20 req/min plus a daily cap), so they stall sweeps. Free endpoints may log prompts. |
-
-### Included sweeps (all ≤ $5)
-
-| sweep | question | runs |
-|---|---|---|
-| `smoke` | do keys, providers and grading work? | 4 (≤ $0.50) |
-| `structure-control` | **does shape matter when every agent runs the same model (Haiku)?** depth 0-3 plus a company-notebook variant, 3 tasks × 3 seeds | 45 |
-| `pilot` | flatness with a realistic model mix (Sonnet commander, Haiku officers, cheap privates) at 4 privates | 16 |
-| `model-swap` | the regiment; privates' model × colonel's effort | 12 |
-| `chain-of-command` | the full Opus→Opus→Sonnet→Haiku→private field army, flattened step by step at 8 privates | 4 |
-| `greenhouse` | the greenhouse exercise with cheap OpenRouter models: lone Haiku vs Haiku + 4 soldiers vs the 3-unit squad, 2 seeds | 6 (≤ $3) |
-| `communication` | **same structure and model, different information flow**: strict tree vs team wiki vs org wiki vs peers vs skip-level vs open | 36 |
-
-## Metrics (in `report.md`, `runs.csv`, `levels.csv`)
-
-- **score / pass**: grade in [0, 1]; pass means a score of 1.
-- **$/run, $/pass, wall time, calls, tokens** (cached, uncached and reasoning tokens separately).
-- **cost by level**: where the money goes in each org.
-- **coordination share**: share of spend and tokens going to managers rather than workers.
-- **delegations / rework**: how many assignments were made, and how many were repeat assignments
-  to the same agent.
-- **coverage**: fraction of the task's key items (functions, products, cities...) that appear in at
-  least one first-round worker assignment. If this is low, work got lost on the way down the
-  hierarchy.
-- **redundancy**: average number of workers given the same item. 1.0 means no duplicated work.
-- **review gain** (code/mixed): final score minus the score when the top agent's first round of
-  delegation came back. This measures whether review at the top caught errors.
-- **parallelism**: total model time divided by wall time.
-- **messages / asks / skip-level**: direct contacts outside delegate/report, and how many of them
-  bypassed a manager. **answer $** is the share of spend on answering colleagues' questions.
-- **wiki writes / reads**: knowledge-base use. **undelivered**: inbox notes nobody read.
-- **rate_wait_s**: time spent queued or backing off on rate limits, recorded separately from model
-  latency.
-- **nudges, turn limits, tool errors, agent errors, fallback calls**: failure modes, mostly of the
-  small models.
-
-The report also has a quality-vs-cost Pareto plot, a stacked cost-by-level chart, and scores
-broken down by task family.
-
-## Experiment design notes
-
-- **Separate structure from model mix.** In the chain-of-command sweep, a deeper org also has more
-  expensive managers, so depth and model quality change together. Run `structure-control`, which
-  uses the same model everywhere, alongside any mixed-model sweep.
-- **Vary task parallelizability.** Hierarchy should help on `qa:kind=aggregate` and
-  `code:coupling=0` and hurt on `qa:kind=chain` and `code:coupling=1`. The interesting result is
-  where it flips.
-- **Repeat runs.** LLM runs vary. Use several seeds, `repeats`, or both, and read the 95% CIs in
-  the report. Differences inside the CI are noise.
-- **Use a fixed baseline.** Include `solo-*` orgs, a single strong agent and a single cheap worker,
-  so the structures have something to beat.
-- **Isolate information flow.** The `communication` sweep keeps structure and models fixed and
-  varies only wikis and contact rules.
-- **Keep prompts constant.** Role prompts come from one template, and only facts about the org
-  (shape, the agent's position, its wikis and contacts) change between structures. If you add `prompt:` to a level, apply the same text to every
-  structure you compare.
-
-## Results layout
-
-```
-results/
-  swarmy.db                       # sweeps, runs, calls, events (SQLite)
-  runs/<run_id>/run.log             # debug log: calls, retries, errors, check-ins, why the run ended
-  runs/<run_id>/transcript.jsonl    # every input, step (text, thinking summary, tool calls) and tool result
-  runs/<run_id>/workspace/          # final shared workspace
-  runs/<run_id>/wiki/               # git repository: a folder per wiki, a file per page, a commit per edit
-  runs/<run_id>/result.json         # grade and per-node cost and calls
-  reports/<sweep>-<id>/             # report.md, charts, runs.csv, levels.csv, summary.json
+```bash
+swarmy plan configs/sweeps/pilot.yaml      # what will run and the per-run caps
 ```
 
-## Notes and caveats
+```bash
+swarmy sweep configs/sweeps/pilot.yaml
+```
 
-- **Claude API settings.** Claude calls use streaming, adaptive thinking, `output_config.effort`
-  and automatic prompt caching. Conversations are append-only, so the cache and replayed thinking
-  stay valid. Thinking summaries are saved to transcripts.
-- **Refusal fallback is on for Opus and Sonnet.** These models send `fallbacks: "default"`, so a
-  safety refusal is retried on a fallback model instead of ending the turn. Fallback calls are
-  flagged (`calls.fallback`, and `fallback_calls` in `runs.csv`) so you can exclude them. Set
-  `refusal_fallback: false` in `configs/models.yaml` to turn it off.
-- **Model-written code is not securely sandboxed.** It runs in a subprocess with no API keys in
-  its environment, plus CPU, memory and file-size limits and a timeout. That is not a security
-  boundary. Run real sweeps in a container or VM.
-- **Prices.** Anthropic prices are list prices. OpenRouter prices in the catalog are a snapshot
-  (`swarmy models check` compares them with live prices). For OpenRouter calls, the cost the
-  provider reports is what gets logged.
+```bash
+swarmy report                              # the latest sweep's report
+```
+
+**Budgets are hard.** Before every call, `max_tokens` is clamped to what the run can still afford
+in the worst case. Each run reserves its cap before starting, so concurrent runs can't overshoot the
+sweep. Runs are interleaved so every org has results on the same tasks if the budget runs out.
+
+**The report** compares orgs on score, cost per run and per pass, time, cost by level, the
+coordination share (spend going to officers), coverage and redundancy of work handed to soldiers,
+rework, review gain, parallelism, contact and wiki use, and failure modes, with 95% confidence
+intervals, a quality-versus-cost Pareto chart and cost-by-level charts.
+
+| included sweep | question |
+|---|---|
+| `smoke` | do keys, providers and grading work? |
+| `structure-control` | does shape matter when every agent runs the same model? |
+| `pilot` | flatness with a realistic model mix |
+| `model-swap` | privates' model × colonel's effort |
+| `chain-of-command` | a five-rank army, flattened step by step |
+| `communication` | same structure and models, different information flow |
+| `greenhouse` | lone Haiku vs Haiku with soldiers vs the squad, on the greenhouse |
+
+**Designing experiments.** Change one thing at a time: use `structure-control` (one model
+everywhere) to separate structure from model mix, and `communication` to vary only information
+flow. Use several seeds and read the confidence intervals. Hierarchy should help on parallel tasks
+(`qa:kind=aggregate`, `code:coupling=0`) and hurt on sequential ones (`qa:kind=chain`,
+`code:coupling=1`). Prompts come from one template, so only facts about the org change between
+structures.
+
+## Tasks
+
+| spec | tests |
+|---|---|
+| `qa:kind=chain,hops=3` | a sequential multi-hop lookup |
+| `qa:kind=aggregate,n=6` | independent lookups, then an argmax (fully parallel) |
+| `qa:kind=census` | scan, filter and count many documents |
+| `code:n=6,coupling=0.3` | implement precisely specified functions against hidden tests; `coupling` sets how many build on others |
+| `mixed:products=4,cities=3` | find pricing rules in documents, then implement `quote(order)` |
+| `greenhouse` | the greenhouse exercise above |
+| `--mission "..."` | your own open-ended objective, ungraded |
+
+Tasks are generated from the seed (a fictional world of about 110 documents with distractors, or
+randomized code specs), so nothing can be memorized, and grading is exact.
+
+```bash
+swarmy task qa:kind=chain,hops=4 --seed 3 --gold     # read a brief and its answer
+```
+
+## Caveats
+
+- **Model-written code is not securely sandboxed.** It runs in a subprocess without API keys, with
+  CPU, memory and time limits, but that is not a security boundary. Run real sweeps in a container.
+- **Prices.** OpenRouter calls log the cost OpenRouter reports. Other calls are costed from the
+  catalog prices (Anthropic's are list prices), which the budget guard also uses.
+- **Refusal fallback.** Opus and Sonnet retry a safety refusal on a fallback model. Those calls are
+  flagged in the data; set `refusal_fallback: false` in `configs/models.yaml` to turn it off.
 
 ## Extending
 
-- **New task family:** subclass `TaskInstance` (`swarmy/tasks/base.py`) and set `brief`,
-  `grade()`, and optionally `corpus`, `workspace_files`, `public_tests()`, `progress()` and
-  `key_terms`. Then register it in `swarmy/tasks/__init__.py`.
-- **New provider:** implement `Provider.new_conversation()` and `Provider.step()`
-  (`swarmy/providers/base.py`), then add it to `ProviderRegistry`.
+- **A task family:** subclass `TaskInstance` (`swarmy/tasks/base.py`), set `brief` and `grade()`,
+  optionally a corpus, workspace files and public tests, and register it in `swarmy/tasks/__init__.py`.
+- **A provider:** implement `new_conversation()` and `step()` (`swarmy/providers/base.py`) and add
+  it to `ProviderRegistry`.
